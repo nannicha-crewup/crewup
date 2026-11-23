@@ -9,7 +9,7 @@ const { DatabaseSync } = require('node:sqlite');
 
 const PORT = process.env.PORT || 3000;
 const DIR = __dirname;
-const DB_PATH = path.join(DIR, 'crewup.db');
+const DB_PATH = process.env.DB_PATH || path.join(DIR, 'crewup.db');
 const db = new DatabaseSync(DB_PATH);
 
 db.exec(`PRAGMA journal_mode=WAL;
