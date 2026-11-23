@@ -49,7 +49,7 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{border-bottom:1px
     <label data-t="covers">แทนงานให้ใคร (ถ้ามี)</label><select id="coverSel"><option value="">—</option></select>
     <div class="row" style="gap:8px">
       <button id="modeSolo" onclick="setClockMode(false)" style="flex:1;padding:14px;font-size:16px">🙋 มาคนเดียว</button>
-      <button id="modeGroup" class="ghost" onclick="setClockMode(true)" style="flex:1;padding:14px;font-size:16px">👥 มากับเพื่อน (2–3 คน)</button>
+      <button id="modeGroup" class="ghost" onclick="setClockMode(true)" style="flex:1;padding:14px;font-size:16px">👥 มากับเพื่อน (สูงสุด 5 คน)</button>
     </div>
     <div id="groupBox" style="display:none"><label data-t="groupMembers">เพื่อนร่วมกะ</label><div id="groupPills"></div></div>
     <label data-t="photo">ถ่ายรูปยืนยัน</label><input type="file" id="photoIn" accept="image/*" capture="environment">
@@ -235,7 +235,7 @@ async function refreshMe(){
     document.getElementById('groupPills').innerHTML=others.map(pill).join('')||'ไม่มีเพื่อนให้เลือก';
     document.getElementById('riderPills').innerHTML=others.map(rpill).join('')||'—';}
 }
-function togglePill(el,id,set){const s=set==='group'?groupSel:riderSel;if(s.has(id)){s.delete(id);el.style.background='';el.style.color='';}else{if(set==='group'&&s.size>=2){alert('เลือกเพื่อนได้สูงสุด 2 คน (รวมเธอเป็น 3 คน)');return;}s.add(id);el.style.background='#0d7a5f';el.style.color='#fff';}}
+function togglePill(el,id,set){const s=set==='group'?groupSel:riderSel;if(s.has(id)){s.delete(id);el.style.background='';el.style.color='';}else{if(set==='group'&&s.size>=4){alert('เลือกเพื่อนได้สูงสุด 4 คน (รวมเธอเป็น 5 คน)');return;}s.add(id);el.style.background='#0d7a5f';el.style.color='#fff';}}
 async function clockIn(){
   const photo=await fileData('photoIn');
   const ids=[me.staff_id];if(isGroupMode){groupSel.forEach(id=>ids.push(id));}
