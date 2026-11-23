@@ -136,6 +136,7 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{border-bottom:1px
     <button onclick="saveReqs()">บันทึกจำนวนคน</button>
     <p class="muted">แตะชื่อเด็กด้านล่างก่อน แล้วแตะวันที่จะให้ทำ — วันที่เด็กว่างจะมีขอบเขียว ถ้าเด็กไม่ได้ลงวันว่างไว้จะถามยืนยันก่อน แตะชื่อที่ลงไว้ในช่องวันเพื่อเอาออก</p>
     <div id="bdStaff" style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0"></div>
+    <div id="bdSummary" style="margin:10px 0"></div>
     <div id="bdGrid" style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px"></div>
   </div>
 
@@ -400,6 +401,13 @@ async function loadBoard(){
   const req={};rq.weekly.forEach(r=>req[r.weekday]=r.required_count);
   const ov={};rq.dates.forEach(r=>ov[r.date]=r.required_count);
   bdData={m,shopId,req,ov,allShifts:sc.shifts,shifts:sc.shifts.filter(s=>s.shop_id===shopId),avail:new Set(av.rows.map(r=>r.staff_id+'|'+r.date)),staff:st.staff,from,to};
+  if(ownerToken){try{const rs=await api('/api/roster-summary?month='+m,{token:ownerToken});
+    document.getElementById('bdSummary').innerHTML='<h3 style="margin:10px 0 4px">สรุปยอดเดือนนี้ (ตามตารางที่ลงไว้)</h3>'
+      +rs.per_shop.filter(s=>s.shifts>0).map(s=>'<div><b>'+s.shop+'</b>: '+s.shifts+' กะ · '+s.hours+' ชม. · ร้านจ่าย $'+s.agent_total+' · ค่าแรงเด็ก $'+s.worker_pay+' · กำไร $'+s.margin+'</div>').join('')
+      +'<div><b>รวมทุก</b>: '+rs.total.shifts+' กะ · '+rs.total.hours+' ชม. · ร้านจ่าย $'+rs.total.agent_total+' · ค่าแรงเด็ก $'+rs.total.worker_pay+' · กำไร $'+rs.total.margin+'</div>'
+      +'<p class="muted">ยอดนี้คิดจากตารางที่ลงไว้ล่วงหน้า ถ้าวันจริงเด็กมาทำไม่ครบ ยอดจะเปลี่ยนตามงานจริง</p>';
+  }catch(e){document.getElementById('bdSummary').innerHTML='';}}
+  else document.getElementById('bdSummary').innerHTML='';
   document.getElementById('bdReq').innerHTML=WD_TH.map((w,i)=>`${w} <input data-reqwd="${i}" type="number" min="0" value="${req[i]??''}" placeholder="0" style="width:56px">`).join(' ');
   renderBoard();
 }

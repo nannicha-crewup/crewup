@@ -75,6 +75,10 @@ try {
   }
   for (const [d, label] of [['2026-11-07', 'Deepavali eve'], ['2026-12-24', 'Christmas eve'], ['2026-12-31', "New Year's eve"]])
     db.prepare('INSERT OR IGNORE INTO ph_eves(date,label) VALUES (?,?)').run(d, label);
+  // Bae's pays 1.5x on 24 & 31 Dec — mark them as special (1.5x) days too, so pay
+  // projections and the owner summary count them. 7 Nov stays as-is (PH eve close only).
+  for (const d of ['2026-12-24', '2026-12-31'])
+    db.prepare('INSERT OR IGNORE INTO special_days(date,label) VALUES (?,?)').run(d, '1.5x (PH eve)');
 } catch (e) {}
 function isPHEve(date) { return !!db.prepare('SELECT 1 FROM ph_eves WHERE date=?').get(date); }
 function baesRule() { const b = db.prepare("SELECT id FROM shops WHERE name=?").get("Bae's"); return b ? db.prepare('SELECT * FROM shop_rules WHERE shop_id=?').get(b.id) : null; }
@@ -176,6 +180,13 @@ function calcPay(rec) {
   const hrs = rec.hours || 0;
   const mult = rec.is_15x ? 1.5 : 1;
   return { workerPay: +(hrs * r.worker * mult).toFixed(2), agentAmount: +(hrs * r.agent * mult).toFixed(2), workerRate: r.worker, agentRate: r.agent, normalHrs: rec.is_15x ? 0 : hrs, hrs15: rec.is_15x ? hrs : 0 };
+}
+function shiftHours(ts, te) { // 'HH:MM' times, overnight aware
+  if (!ts || !te) return null;
+  const [h1, m1] = ts.split(':').map(Number), [h2, m2] = te.split(':').map(Number);
+  let mins = (h2 * 60 + m2) - (h1 * 60 + m1);
+  if (mins <= 0) mins += 24 * 60;
+  return +(mins / 60).toFixed(2);
 }
 function hoursBetween(a, b) {
   const ms = new Date(b) - new Date(a);
@@ -616,6 +627,26 @@ async function handle(req, res) {
       send(res, 200, { alerts }); return;
     }
     // ---- owner only (money) ----
+    // ---- projected monthly budget from the SCHEDULED roster (owner only; money) ----
+    if (p === '/api/roster-summary') {
+      const role = requireRole(req, res, ['owner']); if (!role) return;
+      const month = u.searchParams.get('month') || new Date().toISOString().slice(0, 7);
+      const { from, to } = monthRange(month);
+      const shifts = db.prepare('SELECT * FROM shifts WHERE date BETWEEN ? AND ? ORDER BY date').all(from, to);
+      const perShop = {};
+      for (const shop of SHOPS()) perShop[shop.id] = { shop: shop.name, shifts: 0, hours: 0, agent_total: 0, worker_pay: 0, margin: 0 };
+      for (const s of shifts) {
+        const wd = new Date(s.date + 'T00:00:00').getDay();
+        const hrs = shiftHours(s.time_start, s.time_end) ?? (wd === 6 ? 5 : 4);
+        const pay = calcPay({ shop_id: s.shop_id, staff_id: s.staff_id, date: s.date, hours: hrs, is_15x: is15x(s.date) ? 1 : 0 });
+        const ps = perShop[s.shop_id]; if (!ps) continue;
+        ps.shifts++; ps.hours += hrs; ps.agent_total += pay.agentAmount; ps.worker_pay += pay.workerPay;
+      }
+      const tot = { shifts: 0, hours: 0, agent_total: 0, worker_pay: 0, margin: 0 };
+      for (const ps of Object.values(perShop)) { ps.hours = +ps.hours.toFixed(2); ps.agent_total = +ps.agent_total.toFixed(2); ps.worker_pay = +ps.worker_pay.toFixed(2); ps.margin = +(ps.agent_total - ps.worker_pay).toFixed(2); tot.shifts += ps.shifts; tot.hours += ps.hours; tot.agent_total += ps.agent_total; tot.worker_pay += ps.worker_pay; }
+      tot.margin = +(tot.agent_total - tot.worker_pay).toFixed(2); tot.hours = +tot.hours.toFixed(2); tot.agent_total = +tot.agent_total.toFixed(2); tot.worker_pay = +tot.worker_pay.toFixed(2);
+      send(res, 200, { month, per_shop: Object.values(perShop), total: tot }); return;
+    }
     if (p === '/api/staff' && req.method === 'POST') {
       const role = requireRole(req, res, ['owner']); if (!role) return;
       const b = await bodyJson(req); if (!b.name) return send(res, 400, { error: 'name required' });
