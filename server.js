@@ -540,6 +540,17 @@ async function handle(req, res) {
       log('owner', 'staff_update', 'staff ' + id + ' ' + JSON.stringify(b));
       send(res, 200, { ok: true }); return;
     }
+    if (p.startsWith('/api/staff/') && req.method === 'DELETE') {
+      const role = requireRole(req, res, ['owner']); if (!role) return;
+      const id = Number(p.split('/')[3]);
+      const worked = db.prepare('SELECT COUNT(*) c FROM clock_records WHERE staff_id=?').get(id).c;
+      if (worked > 0) return send(res, 400, { error: 'คนนี้มีประวัติชั่วโมงทำงานแล้ว ลบไม่ได้ — ให้กด Deactivate แทน ประวัติเงินจะได้ไม่หาย' });
+      db.prepare('DELETE FROM availability WHERE staff_id=?').run(id);
+      db.prepare('DELETE FROM shifts WHERE staff_id=?').run(id);
+      db.prepare('DELETE FROM staff WHERE id=?').run(id);
+      log('owner', 'staff_delete', 'staff ' + id + ' deleted');
+      send(res, 200, { ok: true }); return;
+    }
     if (p === '/api/owner/admins' && req.method === 'GET') {
       const role = requireRole(req, res, ['owner']); if (!role) return;
       send(res, 200, { admins: db.prepare('SELECT id,name,active,created_at FROM admins ORDER BY id').all(), max: 3 }); return;
