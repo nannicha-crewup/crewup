@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS shops(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT
 CREATE TABLE IF NOT EXISTS shop_rules(shop_id INTEGER PRIMARY KEY, open_weekdays TEXT, close_weekday TEXT, close_sat_phe TEXT, location TEXT, taxi_cap_per_head REAL);
 CREATE TABLE IF NOT EXISTS ph_eves(date TEXT PRIMARY KEY, label TEXT);
 CREATE TABLE IF NOT EXISTS staff(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, active INTEGER DEFAULT 1, direct_company INTEGER DEFAULT 0, worker_rate_override REAL);
+CREATE TABLE IF NOT EXISTS staff_shop_rates(staff_id INTEGER, shop_id INTEGER, worker_rate REAL, PRIMARY KEY(staff_id, shop_id));
 CREATE TABLE IF NOT EXISTS pins(role TEXT PRIMARY KEY, salt TEXT, hash TEXT);
 CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, role TEXT, created_at TEXT);
 CREATE TABLE IF NOT EXISTS clock_records(id INTEGER PRIMARY KEY AUTOINCREMENT, staff_id INTEGER, shop_id INTEGER, date TEXT, clock_in TEXT, clock_out TEXT, hours REAL, is_15x INTEGER DEFAULT 0, covers_for_id INTEGER, taxi_amount REAL DEFAULT 0, taxi_payer TEXT DEFAULT '', taxi_receipt_no TEXT DEFAULT '', taxi_remark TEXT DEFAULT '', riders TEXT DEFAULT '[]', photo_in TEXT DEFAULT '', photo_out TEXT DEFAULT '', receipt_photo TEXT DEFAULT '', source TEXT DEFAULT 'app', created_at TEXT);
@@ -164,6 +165,9 @@ function rateFor(shopId, staffId, date) {
   if (st && st.worker_rate_override != null) worker = st.worker_rate_override;
   const rh2 = db.prepare("SELECT worker_rate FROM rate_history WHERE scope='staff' AND scope_id=? AND effective_from<=? ORDER BY effective_from DESC LIMIT 1").get(staffId, date);
   if (rh2 && rh2.worker_rate != null) worker = rh2.worker_rate;
+  // Most specific wins: a per-person rate for THIS shop overrides everything else.
+  const mx = db.prepare('SELECT worker_rate FROM staff_shop_rates WHERE staff_id=? AND shop_id=?').get(staffId, shopId);
+  if (mx && mx.worker_rate != null) worker = mx.worker_rate;
   return { agent, worker };
 }
 function is15x(date) { return !!db.prepare('SELECT 1 FROM special_days WHERE date=?').get(date); }
@@ -640,7 +644,17 @@ async function handle(req, res) {
       log('owner', 'admin_update', 'admin ' + a.name + ' updated ' + JSON.stringify({ name: b.name, pin_changed: !!b.pin, active: b.active }));
       send(res, 200, { ok: true }); return;
     }
-    if (p === '/api/owner/staff') { const role = requireRole(req, res, ['owner']); if (!role) return; send(res, 200, { staff: db.prepare('SELECT id,name,active,direct_company,phone,paynow,payname,notes,worker_rate_override FROM staff ORDER BY name').all(), shops: SHOPS() }); return; }
+    if (p === '/api/owner/staff') { const role = requireRole(req, res, ['owner']); if (!role) return; send(res, 200, { staff: db.prepare('SELECT id,name,active,direct_company,phone,paynow,payname,notes,worker_rate_override FROM staff ORDER BY name').all(), shops: SHOPS(), rates: db.prepare('SELECT staff_id, shop_id, worker_rate FROM staff_shop_rates').all() }); return; }
+    if (p === '/api/owner/staff-shop-rates' && req.method === 'POST') {
+      const role = requireRole(req, res, ['owner']); if (!role) return;
+      const b = await bodyJson(req);
+      const sid = Number(b.staff_id); if (!sid || !Array.isArray(b.rates)) return send(res, 400, { error: 'staff_id and rates required' });
+      const st = db.prepare('SELECT id FROM staff WHERE id=?').get(sid); if (!st) return send(res, 400, { error: 'staff not found' });
+      db.prepare('DELETE FROM staff_shop_rates WHERE staff_id=?').run(sid);
+      const ins = db.prepare('INSERT INTO staff_shop_rates(staff_id,shop_id,worker_rate) VALUES (?,?,?)');
+      for (const r of b.rates) { const w = Number(r.worker_rate); if (r.shop_id && !isNaN(w) && w > 0) ins.run(sid, Number(r.shop_id), w); }
+      log('owner', 'staff_shop_rates', staffName(sid) + ' per-shop rates saved'); send(res, 200, { ok: true }); return;
+    }
     if (p === '/api/shop' && req.method === 'POST') {
       const role = requireRole(req, res, ['owner']); if (!role) return;
       const active = db.prepare('SELECT COUNT(*) c FROM shops WHERE active=1').get().c;
