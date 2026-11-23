@@ -437,6 +437,25 @@ async function handle(req, res) {
       log(st.name, 'availability', (b.dates || []).length + ' dates');
       send(res, 200, { ok: true }); return;
     }
+    if (p === '/api/owner/availability' && req.method === 'POST') {
+      // Owner bulk-loads availability on staff's behalf (e.g. days sent in chat).
+      // Body: { marks: [{staff_id, date}] } or { staff_id, dates: [...] } — marks available=1.
+      const role = requireRole(req, res, ['owner']); if (!role) return;
+      const b = await bodyJson(req);
+      const marks = Array.isArray(b.marks) ? b.marks : (b.staff_id && Array.isArray(b.dates) ? b.dates.map(d => ({ staff_id: b.staff_id, date: d })) : []);
+      if (!marks.length) return send(res, 400, { error: 'no availability marks' });
+      const up = db.prepare('INSERT INTO availability(staff_id,date,available) VALUES(?,?,1) ON CONFLICT(staff_id,date) DO UPDATE SET available=1');
+      let n = 0; const skipped = [];
+      for (const m of marks) {
+        const sid = Number(m.staff_id); const dt = String(m.date || '');
+        if (!sid || !/^\d{4}-\d{2}-\d{2}$/.test(dt)) { skipped.push(m); continue; }
+        const st = db.prepare('SELECT id FROM staff WHERE id=?').get(sid);
+        if (!st) { skipped.push(m); continue; }
+        up.run(sid, dt); n++;
+      }
+      log('owner', 'availability_bulk', n + ' marks loaded, ' + skipped.length + ' skipped');
+      send(res, 200, { ok: true, loaded: n, skipped: skipped.length }); return;
+    }
     if (p === '/api/availability') {
       const me = auth(req) ? (staffAuth(req) || null) : null;
       if (!me && !auth(req)) return send(res, 401, { error: 'login required' });
