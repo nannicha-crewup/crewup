@@ -705,10 +705,10 @@ async function handle(req, res) {
         const pay = calcPay(r);
         perStaff[r.staff_id] = perStaff[r.staff_id] || { staff_id: r.staff_id, name: staffName(r.staff_id), paynow: (staffInfo[r.staff_id] || {}).paynow || '', payname: (staffInfo[r.staff_id] || {}).payname || '', hours: 0, worker_pay: 0, agent_total: 0, taxi: 0, taxi_reimburse: 0, by_shop: {} };
         const s = perStaff[r.staff_id]; s.hours += r.hours || 0; s.worker_pay += pay.workerPay; s.agent_total += pay.agentAmount; s.taxi += r.taxi_amount || 0;
-        if (r.taxi_payer === 'staff') s.taxi_reimburse += cappedTaxi(r);
+        if (r.taxi_payer === 'staff' || !r.taxi_payer) s.taxi_reimburse += cappedTaxi(r);
         s.by_shop[r.shop_id] = s.by_shop[r.shop_id] || { shop: shopName(r.shop_id), hours: 0, pay: 0 };
         s.by_shop[r.shop_id].hours += r.hours || 0; s.by_shop[r.shop_id].pay += pay.workerPay;
-        const ps = perShop[r.shop_id]; if (ps) { ps.hours += r.hours || 0; ps.worker_pay += pay.workerPay; ps.agent_total += pay.agentAmount; ps.taxi_claimable += r.taxi_amount || 0; if (r.taxi_payer === 'staff') ps.taxi_reimburse += cappedTaxi(r); }
+        const ps = perShop[r.shop_id]; if (ps) { ps.hours += r.hours || 0; ps.worker_pay += pay.workerPay; ps.agent_total += pay.agentAmount; ps.taxi_claimable += r.taxi_amount || 0; if (r.taxi_payer === 'staff' || !r.taxi_payer) ps.taxi_reimburse += cappedTaxi(r); }
       }
       const paidRows = db.prepare('SELECT staff_id, paid FROM pay_status WHERE month=?').all(month);
       const paidMap = {}; for (const pr of paidRows) paidMap[pr.staff_id] = pr.paid;
