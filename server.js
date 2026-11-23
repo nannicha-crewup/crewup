@@ -52,6 +52,7 @@ seed();
 // Owner enters each staff member's phone in the owner area; no phone on file = no access.
 try { db.exec("ALTER TABLE staff ADD COLUMN phone TEXT DEFAULT ''"); } catch (e) {}
 try { db.exec("ALTER TABLE staff ADD COLUMN paynow TEXT DEFAULT ''"); } catch (e) {}
+try { db.exec("ALTER TABLE staff ADD COLUMN payname TEXT DEFAULT ''"); } catch (e) {}
 try { db.exec("ALTER TABLE staff ADD COLUMN notes TEXT DEFAULT ''"); } catch (e) {}
 try { db.exec("ALTER TABLE sessions ADD COLUMN staff_id INTEGER"); } catch (e) {}
 try { db.exec("ALTER TABLE sessions ADD COLUMN admin_id INTEGER"); } catch (e) {}
@@ -587,6 +588,7 @@ async function handle(req, res) {
       if (b.name) db.prepare('UPDATE staff SET name=? WHERE id=?').run(b.name.trim(), id);
       if (b.phone !== undefined) db.prepare('UPDATE staff SET phone=? WHERE id=?').run(String(b.phone || '').trim(), id);
       if (b.paynow !== undefined) db.prepare('UPDATE staff SET paynow=? WHERE id=?').run(String(b.paynow || '').trim(), id);
+      if (b.payname !== undefined) db.prepare('UPDATE staff SET payname=? WHERE id=?').run(String(b.payname || '').trim(), id);
       if (b.notes !== undefined) db.prepare('UPDATE staff SET notes=? WHERE id=?').run(String(b.notes || '').trim(), id);
       if (b.active !== undefined) db.prepare('UPDATE staff SET active=? WHERE id=?').run(b.active ? 1 : 0, id);
       if (b.direct_company !== undefined) db.prepare('UPDATE staff SET direct_company=? WHERE id=?').run(b.direct_company ? 1 : 0, id);
@@ -630,7 +632,7 @@ async function handle(req, res) {
       log('owner', 'admin_update', 'admin ' + a.name + ' updated ' + JSON.stringify({ name: b.name, pin_changed: !!b.pin, active: b.active }));
       send(res, 200, { ok: true }); return;
     }
-    if (p === '/api/owner/staff') { const role = requireRole(req, res, ['owner']); if (!role) return; send(res, 200, { staff: db.prepare('SELECT id,name,active,direct_company,phone,paynow,notes,worker_rate_override FROM staff ORDER BY name').all(), shops: SHOPS() }); return; }
+    if (p === '/api/owner/staff') { const role = requireRole(req, res, ['owner']); if (!role) return; send(res, 200, { staff: db.prepare('SELECT id,name,active,direct_company,phone,paynow,payname,notes,worker_rate_override FROM staff ORDER BY name').all(), shops: SHOPS() }); return; }
     if (p === '/api/shop' && req.method === 'POST') {
       const role = requireRole(req, res, ['owner']); if (!role) return;
       const active = db.prepare('SELECT COUNT(*) c FROM shops WHERE active=1').get().c;
@@ -688,12 +690,12 @@ async function handle(req, res) {
       const month = u.searchParams.get('month') || new Date().toISOString().slice(0, 7);
       const { from, to } = monthRange(month);
       const recs = db.prepare('SELECT * FROM clock_records WHERE date BETWEEN ? AND ? AND clock_out IS NOT NULL ORDER BY date').all(from, to);
-      const staffInfo = {}; for (const st of db.prepare('SELECT id,paynow FROM staff').all()) staffInfo[st.id] = st.paynow || '';
+      const staffInfo = {}; for (const st of db.prepare('SELECT id,paynow,payname FROM staff').all()) staffInfo[st.id] = { paynow: st.paynow || '', payname: st.payname || '' };
       const perStaff = {}, perShop = {};
       for (const shop of SHOPS()) perShop[shop.id] = { shop: shop.name, hours: 0, worker_pay: 0, agent_total: 0, taxi_claimable: 0, taxi_reimburse: 0 };
       for (const r of recs) {
         const pay = calcPay(r);
-        perStaff[r.staff_id] = perStaff[r.staff_id] || { staff_id: r.staff_id, name: staffName(r.staff_id), paynow: staffInfo[r.staff_id] || '', hours: 0, worker_pay: 0, agent_total: 0, taxi: 0, taxi_reimburse: 0, by_shop: {} };
+        perStaff[r.staff_id] = perStaff[r.staff_id] || { staff_id: r.staff_id, name: staffName(r.staff_id), paynow: (staffInfo[r.staff_id] || {}).paynow || '', payname: (staffInfo[r.staff_id] || {}).payname || '', hours: 0, worker_pay: 0, agent_total: 0, taxi: 0, taxi_reimburse: 0, by_shop: {} };
         const s = perStaff[r.staff_id]; s.hours += r.hours || 0; s.worker_pay += pay.workerPay; s.agent_total += pay.agentAmount; s.taxi += r.taxi_amount || 0;
         if (r.taxi_payer === 'staff') s.taxi_reimburse += cappedTaxi(r);
         s.by_shop[r.shop_id] = s.by_shop[r.shop_id] || { shop: shopName(r.shop_id), hours: 0, pay: 0 };
