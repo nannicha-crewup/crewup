@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS clock_records(id INTEGER PRIMARY KEY AUTOINCREMENT, s
 CREATE TABLE IF NOT EXISTS shifts(id INTEGER PRIMARY KEY AUTOINCREMENT, staff_id INTEGER, shop_id INTEGER, date TEXT, time_start TEXT, time_end TEXT, covers_for_id INTEGER, created_by TEXT DEFAULT '', status TEXT DEFAULT 'scheduled');
 CREATE TABLE IF NOT EXISTS availability(staff_id INTEGER, date TEXT, available INTEGER, PRIMARY KEY(staff_id, date));
 CREATE TABLE IF NOT EXISTS cover_requests(id INTEGER PRIMARY KEY AUTOINCREMENT, staff_id INTEGER, shop_id INTEGER, date TEXT, reason TEXT DEFAULT '', status TEXT DEFAULT 'open', cover_staff_id INTEGER, created_at TEXT);
+CREATE TABLE IF NOT EXISTS pay_status(month TEXT, staff_id INTEGER, paid INTEGER DEFAULT 0, paid_at TEXT, PRIMARY KEY(month, staff_id));
 CREATE TABLE IF NOT EXISTS requirements(shop_id INTEGER, weekday INTEGER, required_count INTEGER, PRIMARY KEY(shop_id, weekday));
 CREATE TABLE IF NOT EXISTS req_dates(shop_id INTEGER, date TEXT, required_count INTEGER, PRIMARY KEY(shop_id, date));
 CREATE TABLE IF NOT EXISTS special_days(date TEXT PRIMARY KEY, label TEXT);
@@ -669,6 +670,15 @@ async function handle(req, res) {
       log('owner', 'ph_eve', b.date + ' set as public-holiday eve (Bae\'s closes 4am)');
       send(res, 200, { ok: true }); return;
     }
+    // ---- pay status: owner marks each staff member paid per month ----
+    if (p === '/api/owner/pay-status' && req.method === 'POST') {
+      const role = requireRole(req, res, ['owner']); if (!role) return;
+      const b = await bodyJson(req);
+      if (!b.month || !b.staff_id) return send(res, 400, { error: 'month and staff_id required' });
+      db.prepare('INSERT INTO pay_status(month,staff_id,paid,paid_at) VALUES (?,?,?,?) ON CONFLICT(month,staff_id) DO UPDATE SET paid=excluded.paid, paid_at=excluded.paid_at').run(b.month, b.staff_id, b.paid ? 1 : 0, b.paid ? new Date().toISOString() : null);
+      log('owner', 'pay_status', staffName(b.staff_id) + ' ' + b.month + ' paid=' + (b.paid ? 1 : 0));
+      send(res, 200, { ok: true }); return;
+    }
     if (p === '/api/owner/summary') {
       const role = requireRole(req, res, ['owner']); if (!role) return;
       const month = u.searchParams.get('month') || new Date().toISOString().slice(0, 7);
@@ -685,7 +695,9 @@ async function handle(req, res) {
         s.by_shop[r.shop_id].hours += r.hours || 0; s.by_shop[r.shop_id].pay += pay.workerPay;
         const ps = perShop[r.shop_id]; if (ps) { ps.hours += r.hours || 0; ps.worker_pay += pay.workerPay; ps.agent_total += pay.agentAmount; ps.taxi_claimable += r.taxi_amount || 0; if (r.taxi_payer === 'staff') ps.taxi_reimburse += cappedTaxi(r); }
       }
-      send(res, 200, { month, per_staff: Object.values(perStaff).map(s => ({ ...s, hours: +s.hours.toFixed(2), worker_pay: +s.worker_pay.toFixed(2), agent_total: +s.agent_total.toFixed(2), taxi: +s.taxi.toFixed(2), taxi_reimburse: +s.taxi_reimburse.toFixed(2) })), per_shop: Object.values(perShop), total_agent: +Object.values(perShop).reduce((a, x) => a + x.agent_total, 0).toFixed(2), total_worker_pay: +Object.values(perShop).reduce((a, x) => a + x.worker_pay, 0).toFixed(2), taxi_warnings: recs.filter(r => r.taxi_warning).map(r => ({ date: r.date, staff: staffName(r.staff_id), shop: shopName(r.shop_id), warning: r.taxi_warning })) }); return;
+      const paidRows = db.prepare('SELECT staff_id, paid FROM pay_status WHERE month=?').all(month);
+      const paidMap = {}; for (const pr of paidRows) paidMap[pr.staff_id] = pr.paid;
+      send(res, 200, { month, per_staff: Object.values(perStaff).map(s => ({ ...s, paid: paidMap[s.staff_id] || 0, hours: +s.hours.toFixed(2), worker_pay: +s.worker_pay.toFixed(2), agent_total: +s.agent_total.toFixed(2), taxi: +s.taxi.toFixed(2), taxi_reimburse: +s.taxi_reimburse.toFixed(2) })), per_shop: Object.values(perShop), total_agent: +Object.values(perShop).reduce((a, x) => a + x.agent_total, 0).toFixed(2), total_worker_pay: +Object.values(perShop).reduce((a, x) => a + x.worker_pay, 0).toFixed(2), taxi_warnings: recs.filter(r => r.taxi_warning).map(r => ({ date: r.date, staff: staffName(r.staff_id), shop: shopName(r.shop_id), warning: r.taxi_warning })) }); return;
     }
     if (p === '/api/owner/activity') { const role = requireRole(req, res, ['owner']); if (!role) return; send(res, 200, { log: db.prepare('SELECT * FROM activity_log ORDER BY id DESC LIMIT 200').all() }); return; }
     if (p === '/api/owner/access' && req.method === 'POST') {
