@@ -523,8 +523,11 @@ async function handle(req, res) {
     if (p === '/api/staff' && req.method === 'POST') {
       const role = requireRole(req, res, ['owner']); if (!role) return;
       const b = await bodyJson(req); if (!b.name) return send(res, 400, { error: 'name required' });
-      const r = db.prepare('INSERT INTO staff(name,direct_company) VALUES (?,?)').run(b.name.trim(), b.direct_company ? 1 : 0);
-      log('owner', 'staff_add', b.name); send(res, 200, { ok: true, id: Number(r.lastInsertRowid) }); return;
+      try {
+        const r = db.prepare('INSERT INTO staff(name,direct_company) VALUES (?,?)').run(b.name.trim(), b.direct_company ? 1 : 0);
+        if (b.phone) db.prepare('UPDATE staff SET phone=? WHERE id=?').run(String(b.phone).trim(), Number(r.lastInsertRowid));
+        log('owner', 'staff_add', b.name); send(res, 200, { ok: true, id: Number(r.lastInsertRowid) }); return;
+      } catch (e) { return send(res, 400, { error: 'มีชื่อนี้อยู่แล้ว — ชื่อพนักงานซ้ำกันไม่ได้' }); }
     }
     if (p.startsWith('/api/staff/') && req.method === 'PATCH') {
       const role = requireRole(req, res, ['owner']); if (!role) return;
