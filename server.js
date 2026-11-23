@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, role TEXT, created_a
 CREATE TABLE IF NOT EXISTS clock_records(id INTEGER PRIMARY KEY AUTOINCREMENT, staff_id INTEGER, shop_id INTEGER, date TEXT, clock_in TEXT, clock_out TEXT, hours REAL, is_15x INTEGER DEFAULT 0, covers_for_id INTEGER, taxi_amount REAL DEFAULT 0, taxi_payer TEXT DEFAULT '', taxi_receipt_no TEXT DEFAULT '', taxi_remark TEXT DEFAULT '', riders TEXT DEFAULT '[]', photo_in TEXT DEFAULT '', photo_out TEXT DEFAULT '', receipt_photo TEXT DEFAULT '', source TEXT DEFAULT 'app', created_at TEXT);
 CREATE TABLE IF NOT EXISTS shifts(id INTEGER PRIMARY KEY AUTOINCREMENT, staff_id INTEGER, shop_id INTEGER, date TEXT, time_start TEXT, time_end TEXT, covers_for_id INTEGER, created_by TEXT DEFAULT '', status TEXT DEFAULT 'scheduled');
 CREATE TABLE IF NOT EXISTS availability(staff_id INTEGER, date TEXT, available INTEGER, PRIMARY KEY(staff_id, date));
+CREATE TABLE IF NOT EXISTS cover_requests(id INTEGER PRIMARY KEY AUTOINCREMENT, staff_id INTEGER, shop_id INTEGER, date TEXT, reason TEXT DEFAULT '', status TEXT DEFAULT 'open', cover_staff_id INTEGER, created_at TEXT);
 CREATE TABLE IF NOT EXISTS requirements(shop_id INTEGER, weekday INTEGER, required_count INTEGER, PRIMARY KEY(shop_id, weekday));
 CREATE TABLE IF NOT EXISTS req_dates(shop_id INTEGER, date TEXT, required_count INTEGER, PRIMARY KEY(shop_id, date));
 CREATE TABLE IF NOT EXISTS special_days(date TEXT PRIMARY KEY, label TEXT);
@@ -456,6 +457,54 @@ async function handle(req, res) {
       const list = STAFF_NAMES().filter(s => s.active).map(s => ({ id: s.id, name: s.name, available: avail.includes(s.id), scheduled_here: sched.includes(s.id), already_working: clocked.includes(s.id) }))
         .sort((a, b) => (b.available - a.available) || (a.already_working - b.already_working));
       send(res, 200, { date, shop: shopName(shopId), candidates: list }); return;
+    }
+    // ---- cover requests: staff report they can't work; the OWNER decides the replacement ----
+    if (p === '/api/cover-request' && req.method === 'POST') {
+      const me = requireStaff(req, res); if (!me) return;
+      const b = await bodyJson(req);
+      if (!b.date || !b.shop_id) return send(res, 400, { error: 'date and shop required' });
+      const dup = db.prepare("SELECT id FROM cover_requests WHERE staff_id=? AND shop_id=? AND date=? AND status='open'").get(me.id, b.shop_id, b.date);
+      if (dup) return send(res, 400, { error: 'แจ้งไปแล้ว — คำขอนี้ยังรออยู่' });
+      const r = db.prepare('INSERT INTO cover_requests(staff_id,shop_id,date,reason,status,created_at) VALUES (?,?,?,?,\'open\',?)').run(me.id, b.shop_id, b.date, String(b.reason || '').trim(), new Date().toISOString());
+      log(me.name, 'cover_request', me.name + ' cannot work ' + shopName(b.shop_id) + ' ' + b.date);
+      send(res, 200, { ok: true, id: Number(r.lastInsertRowid) }); return;
+    }
+    if (p === '/api/cover-requests') {
+      const role = requireRole(req, res, ['owner', 'admin']); if (!role) return;
+      const reqs = db.prepare("SELECT * FROM cover_requests WHERE status='open' ORDER BY date").all();
+      const out = reqs.map(rq => {
+        const avail = db.prepare('SELECT staff_id FROM availability WHERE date=? AND available=1').all(rq.date).map(x => x.staff_id);
+        const clocked = db.prepare('SELECT staff_id FROM clock_records WHERE date=?').all(rq.date).map(x => x.staff_id);
+        const sched = db.prepare('SELECT staff_id FROM shifts WHERE date=? AND shop_id=?').all(rq.date, rq.shop_id).map(x => x.staff_id);
+        const cands = STAFF_NAMES().filter(s => s.active && s.id !== rq.staff_id).map(s => ({
+          id: s.id, name: s.name,
+          available: avail.includes(s.id),
+          shop_shifts: db.prepare('SELECT COUNT(*) c FROM clock_records WHERE staff_id=? AND shop_id=?').get(s.id, rq.shop_id).c,
+          already_working: clocked.includes(s.id),
+          scheduled_here: sched.includes(s.id)
+        })).sort((a, b) => (b.available - a.available) || (a.already_working - b.already_working) || (b.shop_shifts - a.shop_shifts));
+        return { id: rq.id, staff_id: rq.staff_id, name: staffName(rq.staff_id), shop: shopName(rq.shop_id), shop_id: rq.shop_id, date: rq.date, reason: rq.reason, candidates: cands };
+      });
+      send(res, 200, { requests: out }); return;
+    }
+    if (p.startsWith('/api/cover-requests/') && req.method === 'POST') {
+      const role = requireRole(req, res, ['owner', 'admin']); if (!role) return;
+      const b = await bodyJson(req);
+      const id = Number(p.split('/')[3]);
+      const rq = db.prepare('SELECT * FROM cover_requests WHERE id=?').get(id);
+      if (!rq) return send(res, 404, { error: 'request not found' });
+      if (b.action === 'cancel') {
+        db.prepare("UPDATE cover_requests SET status='cancelled' WHERE id=?").run(id);
+        log(role, 'cover_cancel', 'cover request ' + id + ' cancelled'); send(res, 200, { ok: true }); return;
+      }
+      const coverId = Number(b.cover_staff_id);
+      const cover = db.prepare('SELECT * FROM staff WHERE id=?').get(coverId);
+      if (!cover || !cover.active) return send(res, 400, { error: 'invalid replacement' });
+      db.prepare('DELETE FROM shifts WHERE staff_id=? AND shop_id=? AND date=?').run(rq.staff_id, rq.shop_id, rq.date);
+      db.prepare('INSERT INTO shifts(staff_id,shop_id,date,time_start,time_end,covers_for_id,created_by) VALUES (?,?,?,?,?,?,?)').run(coverId, rq.shop_id, rq.date, '23:00', baesClose(rq.date), rq.staff_id, role);
+      db.prepare("UPDATE cover_requests SET status='assigned', cover_staff_id=? WHERE id=?").run(coverId, id);
+      log(role, 'cover_assign', staffName(coverId) + ' covers ' + staffName(rq.staff_id) + ' at ' + shopName(rq.shop_id) + ' ' + rq.date);
+      send(res, 200, { ok: true }); return;
     }
     // ---- admin / owner (PIN) ----
     if (p === '/api/shift' && req.method === 'POST') {

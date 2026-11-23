@@ -91,6 +91,13 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{border-bottom:1px
     <input type="date" id="findDate"><select id="findShop"></select>
     <button onclick="findRepl()" data-t="find">ค้นหา</button>
     <div id="findBox"></div>
+    <hr>
+    <h2>แจ้งลา / ไม่มาทำงาน</h2>
+    <p class="muted">แจ้งล่วงหน้าว่ามาทำงานวันนั้นไม่ได้ เจ้าของจะเห็นคำขอและเลือกคนแทนให้เอง</p>
+    <input type="date" id="leaveDate"><select id="leaveShop"></select>
+    <input id="leaveReason" placeholder="เหตุผล (ถ้ามี)">
+    <button onclick="reportLeave()">แจ้งลา</button>
+    <div id="leaveMsg"></div>
   </div>
 
   <div id="tab-admin" class="card" style="display:none">
@@ -125,6 +132,10 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{border-bottom:1px
       <button onclick="dlBill('direct')" data-t="dlDirect">โหลดบิล Nicha (Date/Timing/Hr/1.5/Total)</button>
       <button onclick="dlBill('bng')" data-t="dlBng">โหลดบิล BNG ต่อร้าน</button>
       <button onclick="dlXlsx()" data-t="dlXlsx">โหลด Excel สำรองทั้งเดือน (.xlsx)</button>
+      <h2>คำขอหาคนแทน (รอเธอตัดสินใจ)</h2>
+      <p class="muted">เด็กแจ้งลาแล้วจะขึ้นตรงนี้ พร้อมรายชื่อคนที่ว่างและประวัติว่าใครเคยทำร้านนี้มากี่กะ — เธอกดเลือกคนแทนได้เลย แอปไม่มีแจ้งเตือนเด้งเข้ามือถือ เธอต้องเปิดแอปมาดู</p>
+      <button class="ghost" onclick="loadCoverRequests()">ดูคำขอหาคนแทน</button>
+      <div id="coverReqBox"></div>
       <h2 data-t="adminsTitle">แอดมิน (สูงสุด 3 คน — จัดตารางได้อย่างเดียว ไม่เห็นยอดเงิน)</h2>
       <p class="muted" data-t="adminsNote">แอดมินแต่ละคนมีชื่อและ PIN ของตัวเอง ประวัติการเข้าใช้จะบอกว่าแอดมินคนไหนทำอะไร</p>
       <div id="adminDir"></div>
@@ -168,7 +179,7 @@ en:{loginTitle:'Staff login',loginNote:'Enter your registered name and mobile nu
 function setLang(l){LANG=l;document.querySelectorAll('[data-t]').forEach(e=>{const k=e.dataset.t;if(T[l][k])e.textContent=T[l][k]});}
 async function api(path,opts={}){const r=await fetch(path,{...opts,headers:{'Content-Type':'application/json',...(opts.token?{Authorization:'Bearer '+opts.token}:{}),...(opts.headers||{})}});const t=await r.text();let j;try{j=JSON.parse(t)}catch(e){j={raw:t}}if(!r.ok)throw new Error(j.error||('HTTP '+r.status));return j;}
 function fileData(id){return new Promise(res=>{const f=document.getElementById(id).files[0];if(!f)return res('');const rd=new FileReader();rd.onload=()=>{const img=new Image();img.onload=()=>{const c=document.createElement('canvas');const s=Math.min(1,900/Math.max(img.width,img.height));c.width=img.width*s;c.height=img.height*s;c.getContext('2d').drawImage(img,0,0,c.width,c.height);res(c.toDataURL('image/jpeg',0.65))};img.src=rd.result};rd.readAsDataURL(f)})}
-async function loadDir(){const d=await api('/api/directory');shops=d.shops;const fill=(id)=>{const el=document.getElementById(id);el.innerHTML=shops.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')};['shopSel','findShop','schShop','bfShop','billShop'].forEach(fill);}
+async function loadDir(){const d=await api('/api/directory');shops=d.shops;const fill=(id)=>{const el=document.getElementById(id);el.innerHTML=shops.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')};['shopSel','findShop','schShop','bfShop','billShop','leaveShop'].forEach(fill);}
 async function staffLogin(){
   const name=document.getElementById('loginName').value.trim(), phone=document.getElementById('loginPhone').value.trim();
   try{const d=await api('/api/staff-login',{method:'POST',body:JSON.stringify({name,phone})});
@@ -284,6 +295,23 @@ async function loadToday(){
   const d=await api('/api/today-status',{token:staffToken});
   document.getElementById('todayBox').innerHTML=d.shops.map(s=>`<div><b>${s.shop}</b> — clocked in ${s.clocked_in_count} / scheduled ${s.scheduled_count}<br>${s.scheduled.map(x=>x.staff+(x.clocked_in?' ✅':' ⏳')).join(', ')||'—'}</div>`).join('');
 }
+async function reportLeave(){
+  const d=document.getElementById('leaveDate').value, s=document.getElementById('leaveShop').value, r=document.getElementById('leaveReason').value;
+  try{await api('/api/cover-request',{method:'POST',token:staffToken,body:JSON.stringify({date:d,shop_id:Number(s),reason:r})});document.getElementById('leaveMsg').textContent='แจ้งลาแล้ว เจ้าของจะหาคนแทนให้';}
+  catch(e){document.getElementById('leaveMsg').textContent='แจ้งไม่ได้: '+e.message;}
+}
+async function loadCoverRequests(){
+  const box=document.getElementById('coverReqBox');if(!box)return;
+  try{
+    const d=await api('/api/cover-requests',{token:ownerToken||adminToken});
+    if(!d.requests.length){box.innerHTML='ไม่มีคำขอค้างอยู่';return;}
+    box.innerHTML=d.requests.map(rq=>`<div style="border:1px solid var(--hatch-widget-border);border-radius:8px;padding:10px;margin:8px 0"><b>${rq.name}</b> ลา ${rq.date} · ${rq.shop}${rq.reason?' — '+rq.reason:''}<br><span class="muted">คนที่เหมาะ (เรียงจากว่าง + เคยทำร้านนี้มาก่อน):</span><br>`+
+      rq.candidates.slice(0,6).map(c=>`<button class="ghost" style="margin:2px" onclick="assignCover(${rq.id},${c.id},'${c.name}')">${c.name}${c.available?' ✅ว่าง':''} · ${rq.shop} ${c.shop_shifts} กะ${c.already_working?' · ทำงานที่อื่นวันนั้นแล้ว':''}${c.scheduled_here?' · มีกะที่ร้านนี้แล้ว':''}</button>`).join('')+
+      `<br><button class="ghost" onclick="cancelCoverReq(${rq.id})">ปิดคำขอนี้</button></div>`).join('');
+  }catch(e){box.innerHTML='โหลดคำขอไม่ได้: '+e.message;}
+}
+async function assignCover(reqId,coverId,name){if(!confirm('ให้ '+name+' มาแทนกะนี้?'))return;await api('/api/cover-requests/'+reqId,{method:'POST',token:ownerToken||adminToken,body:JSON.stringify({cover_staff_id:coverId})});alert('เลือก '+name+' มาแทนแล้ว');loadCoverRequests();}
+async function cancelCoverReq(reqId){if(!confirm('ปิดคำขอนี้?'))return;await api('/api/cover-requests/'+reqId,{method:'POST',token:ownerToken||adminToken,body:JSON.stringify({action:'cancel'})});loadCoverRequests();}
 async function findRepl(){
   const d=await api('/api/replacements?date='+document.getElementById('findDate').value+'&shop_id='+document.getElementById('findShop').value,{token:staffToken});
   document.getElementById('findBox').innerHTML=d.candidates.map(c=>`<div>${c.name} ${c.available?'✅ available':''} ${c.scheduled_here?'· scheduled here':''} ${c.already_working?'· already working':''}</div>`).join('');
@@ -304,6 +332,7 @@ async function loadOwner(){
   document.getElementById('staffDir').innerHTML=d.staff.map(s=>`<div>${s.name} · phone: <input data-phone="${s.id}" value="${s.phone||''}" placeholder="add phone"> <button onclick="savePhone(${s.id})">Save phone</button> <button class="ghost" onclick="toggleStaff(${s.id},${s.active?0:1})">${s.active?'Deactivate (block)':'Activate'}</button> <button class="danger" onclick="deleteStaff(${s.id},'${s.name}')">ลบ</button> ${s.direct_company?'(direct to company)':''}</div>`).join('');
   document.getElementById('billStaff').innerHTML=d.staff.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
   const fill=(id)=>{document.getElementById(id).innerHTML=d.staff.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')};['schStaff','bfStaff','schCover'].forEach(fill);
+  loadCoverRequests();
 }
 async function addAdmin(){const n=document.getElementById('newAdminName').value,p=document.getElementById('newAdminPin').value;await api('/api/owner/admins',{method:'POST',token:ownerToken,body:JSON.stringify({name:n,pin:p})});loadOwner();}
 async function toggleAdmin(id,active){await api('/api/owner/admins/'+id,{method:'PATCH',token:ownerToken,body:JSON.stringify({active:!!active})});loadOwner();}
