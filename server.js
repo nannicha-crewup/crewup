@@ -212,6 +212,10 @@ async function handle(req, res) {
       send(res, 200, { shops: SHOPS().filter(s => s.active).map(s => ({ id: s.id, name: s.name, color: s.color })) });
       return;
     }
+    if (p === '/api/staff-list') {
+      const st = requireStaff(req, res); if (!st) return;
+      send(res, 200, { staff: db.prepare('SELECT id,name FROM staff WHERE active=1 ORDER BY name').all() }); return;
+    }
     if (p === '/api/staff-login' && req.method === 'POST') {
       // Step 1 of OTP login: name + registered phone. No real SMS is sent in
       // this trial — the 6-digit code is shown to the OWNER in the owner area

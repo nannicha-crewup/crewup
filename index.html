@@ -228,18 +228,25 @@ async function refreshMe(){
   const st=await api('/api/my-status?staff_id='+me.staff_id,{token:staffToken}).catch(()=>null);
   if(st&&st.open){document.getElementById('openShift').textContent='⏱ Clocked in at '+st.open.shop+' since '+new Date(st.open.clock_in).toLocaleTimeString();document.getElementById('clockOutBox').style.display='block';window._openId=st.open.id;}
   else{document.getElementById('openShift').textContent='Not clocked in.';document.getElementById('clockOutBox').style.display='none';}
+  const sl=await api('/api/staff-list',{token:staffToken}).catch(()=>null);
+  if(sl){const others=sl.staff.filter(s=>s.id!==me.staff_id);
+    const pill=s=>`<button type="button" onclick="togglePill(this,${s.id},'group')" style="margin:2px;padding:8px 12px;border-radius:20px;border:1px solid var(--hatch-widget-border);background:var(--hatch-widget-surface)"> ${s.name}</button>`;
+    const rpill=s=>`<button type="button" onclick="togglePill(this,${s.id},'rider')" style="margin:2px;padding:8px 12px;border-radius:20px;border:1px solid var(--hatch-widget-border);background:var(--hatch-widget-surface)"> ${s.name}</button>`;
+    document.getElementById('groupPills').innerHTML=others.map(pill).join('')||'ไม่มีเพื่อนให้เลือก';
+    document.getElementById('riderPills').innerHTML=others.map(rpill).join('')||'—';}
 }
+function togglePill(el,id,set){const s=set==='group'?groupSel:riderSel;if(s.has(id)){s.delete(id);el.style.background='';el.style.color='';}else{if(set==='group'&&s.size>=2){alert('เลือกเพื่อนได้สูงสุด 2 คน (รวมเธอเป็น 3 คน)');return;}s.add(id);el.style.background='#0d7a5f';el.style.color='#fff';}}
 async function clockIn(){
   const photo=await fileData('photoIn');
   const ids=[me.staff_id];if(isGroupMode){groupSel.forEach(id=>ids.push(id));}
   try{const d=await api('/api/clock-in',{method:'POST',token:staffToken,body:JSON.stringify({staff_ids:ids,shop_id:Number(document.getElementById('shopSel').value),covers_for_id:Number(document.getElementById('coverSel').value)||null,photo})});
-    document.getElementById('clockMsg').textContent='✅ '+JSON.stringify(d.results);refreshMe();}catch(e){document.getElementById('clockMsg').textContent='❌ '+e.message;}
+    document.getElementById('clockMsg').textContent='✅ '+JSON.stringify(d.results);groupSel.clear();refreshMe();}catch(e){document.getElementById('clockMsg').textContent='❌ '+e.message;}
 }
 function clockOut(){document.getElementById('clockOutBox').style.display='block';}
 async function doClockOut(){
   const photo=await fileData('photoOut'), receipt=await fileData('receiptPhoto');
   try{const d=await api('/api/clock-out',{method:'POST',token:staffToken,body:JSON.stringify({record_id:window._openId,photo,transport_mode:document.getElementById('transportMode').value,company_transport_at:document.getElementById('companyAt').value,taxi_amount:Number(document.getElementById('taxiAmt').value||0),taxi_payer:document.getElementById('taxiPayer').value,taxi_receipt_no:document.getElementById('taxiReceipt').value,riders:[...riderSel],receipt_photo:receipt})});
-    document.getElementById('clockMsg').textContent='✅ Clocked out, '+d.hours+'h'+(d.warnings&&d.warnings.length?' ⚠️ '+d.warnings.join('; '):'');refreshMe();}catch(e){document.getElementById('clockMsg').textContent='❌ '+e.message;}
+    document.getElementById('clockMsg').textContent='✅ Clocked out, '+d.hours+'h'+(d.warnings&&d.warnings.length?' ⚠️ '+d.warnings.join('; '):'');riderSel.clear();refreshMe();}catch(e){document.getElementById('clockMsg').textContent='❌ '+e.message;}
 }
 async function loadMyHours(){
   const m=document.getElementById('hoursMonth').value||new Date().toISOString().slice(0,7);
