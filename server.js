@@ -40,6 +40,10 @@ function seed() {
     ins.run('Milli', '#7a4fd0', 45, 35, 'BNG Hospitality Pte Ltd', '');
     ins.run('Bungalow', '#c47a1a', 45, 35, '', '');
   }
+  const ph = db.prepare('INSERT OR IGNORE INTO shops(name,color,agent_rate,worker_rate,active) VALUES (?,?,?,?,0)');
+  ph.run('ร้านใหม่ 1', '#888888', 45, 35);
+  ph.run('ร้านใหม่ 2', '#888888', 45, 35);
+  ph.run('ร้านใหม่ 3', '#888888', 45, 35);
   const m = db.prepare('SELECT COUNT(*) c FROM staff').get().c;
   if (m === 0) {
     const names = ['Ariel','Bell','Celine','Chloe','Gift','Ivy','Janice','Jaslyn','Jay','Jee','KK','Kate','Koiz','Namwan','Natty','Nicha','Nonney','Oil','Pear','Phinya','Ploy','Rene','Scarlett','Venus'];
@@ -636,7 +640,7 @@ async function handle(req, res) {
     if (p === '/api/shop' && req.method === 'POST') {
       const role = requireRole(req, res, ['owner']); if (!role) return;
       const active = db.prepare('SELECT COUNT(*) c FROM shops WHERE active=1').get().c;
-      if (active >= 5) return send(res, 400, { error: 'max 5 shops' });
+      if (active >= 8) return send(res, 400, { error: 'max 8 shops' });
       const b = await bodyJson(req);
       const r = db.prepare('INSERT INTO shops(name,color,agent_rate,worker_rate,company_name,company_address) VALUES (?,?,?,?,?,?)').run(b.name, b.color || '#333', Number(b.agent_rate || 45), Number(b.worker_rate || 35), b.company_name || '', b.company_address || '');
       log('owner', 'shop_add', b.name); send(res, 200, { ok: true, id: Number(r.lastInsertRowid) }); return;
