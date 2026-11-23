@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CrewUp — Staff Clock-In</title>
+<style>
+*{box-sizing:border-box}body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#f4f6f5;color:#222;max-width:640px;margin:0 auto;padding:12px}
+h1{font-size:22px;margin:6px 0}h2{font-size:17px;margin:18px 0 8px}.card{background:#fff;border-radius:14px;padding:14px;margin:10px 0;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+button{border:0;border-radius:10px;padding:12px 16px;font-size:16px;background:#0d7a5f;color:#fff;cursor:pointer;margin:4px 4px 4px 0}
+button.ghost{background:#e8ecea;color:#222}button.danger{background:#b3261e}button:disabled{opacity:.5}
+input,select,textarea{width:100%;padding:11px;border:1px solid #ccc;border-radius:10px;font-size:16px;margin:5px 0}
+label{font-size:14px;color:#555}.pill{display:inline-block;border:1px solid #999;border-radius:20px;padding:8px 14px;margin:4px;cursor:pointer}
+.pill.sel{background:#0d7a5f;color:#fff;border-color:#0d7a5f}.row{display:flex;gap:8px}.row>*{flex:1}
+.muted{color:#666;font-size:14px}.money{font-weight:700}.ok{color:#0d7a5f}.bad{color:#b3261e}
+table{width:100%;border-collapse:collapse;font-size:14px}td,th{border-bottom:1px solid #eee;padding:6px 4px;text-align:left}
+.tabs{display:flex;gap:6px;flex-wrap:wrap}.tabs button{background:#e8ecea;color:#222;padding:9px 12px;font-size:14px}
+.tabs button.sel{background:#0d7a5f;color:#fff}
+</style></head>
+<body>
+<h1>🕐 CrewUp</h1>
+<div class="muted" id="langRow"><button class="ghost" onclick="setLang('th')">ไทย</button> <button class="ghost" onclick="setLang('en')">EN</button> <span id="who"></span></div>
+
+<div id="login" class="card">
+  <h2 data-t="loginTitle">เข้าสู่ระบบพนักงาน</h2>
+  <p class="muted" data-t="loginNote">กรอกชื่อและเบอร์มือถือที่ลงทะเบียนไว้กับเจ้าของ ถ้าชื่อหรือเบอร์ไม่ตรง จะเปิดแอปไม่ได้</p>
+  <label data-t="yourName">ชื่อของคุณ</label><input id="loginName" placeholder="เช่น Pear">
+  <label data-t="yourPhone">เบอร์มือถือ</label><input id="loginPhone" inputmode="tel" placeholder="เช่น 81234567">
+  <button onclick="staffLogin()" data-t="sendOtp">ส่งรหัส OTP</button>
+  <p id="loginErr" class="bad"></p>
+  <div id="otpBox" style="display:none">
+    <label data-t="otpLabel">รหัส OTP 6 หลัก</label><input id="otpCode" inputmode="numeric" maxlength="6" placeholder="••••••">
+    <p class="muted" data-t="otpNote">รหัสใช้ได้ 10 นาที เจ้าของจะส่งรหัสให้ทาง WhatsApp (ทดลอง: ไม่ได้ส่ง SMS จริง รหัสอยู่ในหน้าเจ้าของ)</p>
+    <button onclick="verifyOtp()" data-t="verifyOtp">ยืนยันรหัส</button>
+    <p id="otpErr" class="bad"></p>
+  </div>
+  <hr>
+  <p class="muted" data-t="ownerHint">เจ้าของ / แอดมิน: ตั้ง PIN ครั้งแรกด้านล่าง แล้วเข้าโซนของตัวเอง</p>
+  <div class="row"><input id="pinRole" value="owner" readonly><input id="pinName" placeholder="ชื่อแอดมิน (ถ้าเข้าโซนแอดมิน)"><input id="pinCode" inputmode="numeric" placeholder="PIN (4 ตัวขึ้นไป)"></div>
+  <button onclick="pinSetup()" data-t="setPin">ตั้ง PIN</button>
+  <button onclick="pinVerify()" data-t="enterPin">เข้าโซน PIN</button>
+  <p id="pinErr" class="bad"></p>
+</div>
+
+<div id="app" style="display:none">
+  <div class="tabs" id="tabs"></div>
+
+  <div id="tab-clock" class="card">
+    <h2 data-t="clockTitle">ตอกบัตร</h2>
+    <div id="meLine" class="muted"></div>
+    <label data-t="shop">ร้าน</label><select id="shopSel"></select>
+    <label data-t="covers">แทนงานให้ใคร (ถ้ามี)</label><select id="coverSel"><option value="">—</option></select>
+    <label><input type="checkbox" id="groupMode" style="width:auto"> <span data-t="groupMode">ตอกเป็นกลุ่ม (2–3 คน เลือกชื่อเพิ่มด้านล่าง)</span></label>
+    <div id="groupBox" style="display:none"><label data-t="groupMembers">เพื่อนร่วมกะ</label><div id="groupPills"></div></div>
+    <label data-t="photo">ถ่ายรูปยืนยัน</label><input type="file" id="photoIn" accept="image/*" capture="environment">
+    <button onclick="clockIn()" data-t="clockIn">ตอกบัตรเข้า</button>
+    <button class="ghost" onclick="clockOut()" data-t="clockOut">ตอกบัตรออก</button>
+    <div id="openShift" class="muted"></div>
+    <div id="clockOutBox" style="display:none">
+      <label data-t="transport">กลับบ้านยังไง</label><select id="transportMode"><option value="taxi">แท็กซี่ (เบิกได้สูงสุด $20/คน ต้องมีใบเสร็จ)</option><option value="company">รถบริษัท (ออก 0.5–1 ชม. หลังร้านปิด)</option></select>
+      <label data-t="companyAt">เวลารถบริษัทออก (ถ้าใช้รถบริษัท)</label><input id="companyAt" type="time">
+      <label data-t="taxiAmt">ค่าแท็กซี่ ($)</label><input id="taxiAmt" type="number" step="0.01" value="0">
+      <p class="muted" id="taxiWarn"></p>
+      <label data-t="taxiPayer">ใครจ่ายค่าแท็กซี่</label><select id="taxiPayer"><option value="staff">เด็กจ่ายเอง</option><option value="owner">เจ้าของจ่าย</option><option value="shop">ร้านจ่าย</option></select>
+      <label data-t="receiptNo">เลขใบเสร็จแท็กซี่</label><input id="taxiReceipt">
+      <label data-t="riders">คนนั่งรถมาด้วย</label><div id="riderPills"></div>
+      <label data-t="receiptPhoto">รูปบิลแท็กซี่</label><input type="file" id="receiptPhoto" accept="image/*" capture="environment">
+      <label data-t="photoOut">ถ่ายรูปตอนออก</label><input type="file" id="photoOut" accept="image/*" capture="environment">
+      <button onclick="doClockOut()" data-t="confirmOut">ยืนยันตอกออก</button>
+    </div>
+    <p id="clockMsg"></p>
+  </div>
+
+  <div id="tab-hours" class="card" style="display:none">
+    <h2 data-t="myHours">ชั่วโมงของฉัน (ไม่มียอดเงิน)</h2>
+    <input type="month" id="hoursMonth"><button onclick="loadMyHours()" data-t="show">ดู</button>
+    <div id="myHours"></div>
+  </div>
+
+  <div id="tab-avail" class="card" style="display:none">
+    <h2 data-t="availTitle">ลงวันว่าง (ล่วงหน้า 3 เดือน)</h2>
+    <p class="muted" data-t="availNote">แตะวันที่ว่าง แล้วกดบันทึก</p>
+    <div id="availCal"></div>
+    <button onclick="saveAvail()" data-t="save">บันทึกวันว่าง</button>
+  </div>
+
+  <div id="tab-today" class="card" style="display:none">
+    <h2 data-t="todayTitle">Status วันนี้</h2>
+    <div id="todayBox"></div>
+  </div>
+
+  <div id="tab-find" class="card" style="display:none">
+    <h2 data-t="findTitle">หาคนแทน</h2>
+    <input type="date" id="findDate"><select id="findShop"></select>
+    <button onclick="findRepl()" data-t="find">ค้นหา</button>
+    <div id="findBox"></div>
+  </div>
+
+  <div id="tab-admin" class="card" style="display:none">
+    <h2 data-t="adminTitle">แอดมิน — จัดตาราง (ไม่เห็นยอดเงิน)</h2>
+    <div id="adminGate"><p class="muted">ต้องใส่ PIN แอดมินก่อน (ใช้ PIN เจ้าของก็ได้)</p></div>
+    <div id="adminBody" style="display:none">
+      <p class="muted">Bae's: Wed–Sat, 11pm–3am Wed–Fri, 11pm–4am Sat &amp; public-holiday eve, Tanjong Pagar. Taxi max $20/head with receipt, otherwise company transport 0.5–1h after close.</p>
+      <input type="date" id="schDate"><select id="schStaff"></select><select id="schShop"></select>
+      <div class="row"><input id="schStart" placeholder="เวลาเริ่ม เช่น 11:00"><input id="schEnd" placeholder="เวลาเลิก เช่น 15:00"></div>
+      <select id="schCover"><option value="">แทนใคร (ถ้ามี)</option></select>
+      <button onclick="addShift()" data-t="addShift">เพิ่มกะ</button>
+      <button class="ghost" onclick="loadSchedule()" data-t="showSched">ดูตาราง</button>
+      <div id="schedBox"></div>
+      <h2 data-t="backfill">ลงกะย้อนหลัง</h2>
+      <input type="date" id="bfDate"><select id="bfStaff"></select><select id="bfShop"></select>
+      <div class="row"><input id="bfIn" type="datetime-local"><input id="bfOut" type="datetime-local"></div>
+      <button onclick="backfill()" data-t="addBackfill">ลงกะย้อนหลัง</button>
+      <h2 data-t="alerts">กะที่ขาดคน</h2>
+      <button class="ghost" onclick="loadAlerts()" data-t="checkAlerts">เช็กกะขาดคน</button>
+      <div id="alertBox"></div>
+    </div>
+  </div>
+
+  <div id="tab-owner" class="card" style="display:none">
+    <h2 data-t="ownerTitle">เจ้าของ — ยอดเงิน (เฉพาะเจ้าของ)</h2>
+    <div id="ownerGate"><p class="muted">ต้องใส่ PIN เจ้าของก่อน</p></div>
+    <div id="ownerBody" style="display:none">
+      <input type="month" id="sumMonth"><button onclick="loadSummary()" data-t="showSummary">ดูสรุปยอด</button>
+      <div id="summaryBox"></div>
+      <h2 data-t="bills">บิลส่งบริษัท / ส่งร้าน</h2>
+      <select id="billStaff"></select><select id="billShop"></select>
+      <button onclick="dlBill('direct')" data-t="dlDirect">โหลดบิล Nicha (Date/Timing/Hr/1.5/Total)</button>
+      <button onclick="dlBill('bng')" data-t="dlBng">โหลดบิล BNG ต่อร้าน</button>
+      <button onclick="dlXlsx()" data-t="dlXlsx">โหลด Excel สำรองทั้งเดือน (.xlsx)</button>
+      <h2 data-t="adminsTitle">แอดมิน (สูงสุด 3 คน — จัดตารางได้อย่างเดียว ไม่เห็นยอดเงิน)</h2>
+      <p class="muted" data-t="adminsNote">แอดมินแต่ละคนมีชื่อและ PIN ของตัวเอง ประวัติการเข้าใช้จะบอกว่าแอดมินคนไหนทำอะไร</p>
+      <div id="adminDir"></div>
+      <div class="row"><input id="newAdminName" placeholder="ชื่อแอดมินใหม่"><input id="newAdminPin" inputmode="numeric" placeholder="PIN แอดมินใหม่"></div>
+      <button onclick="addAdmin()" data-t="addAdmin">เพิ่มแอดมิน</button>
+      <h2 data-t="staffDir">รายชื่อพนักงาน + เบอร์มือถือ</h2>
+      <p class="muted" data-t="phoneNote">ใส่เบอร์มือถือของเด็กแต่ละคนไว้ตรงนี้ เด็กจะเข้าแอปได้ก็ต่อเมื่อกรอกชื่อ+เบอร์ตรงกับที่ลงไว้ ถอดเบอร์ออกหรือปิดชื่อ = บล็อกทันที ไม่ต้องเปลี่ยนลิงก์</p>
+      <div id="staffDir"></div>
+      <div class="row"><input id="newStaffName" placeholder="ชื่อเด็กใหม่"><input id="newStaffPhone" placeholder="เบอร์มือถือ"></div>
+      <button onclick="addStaff()" data-t="addStaff">เพิ่มพนักงาน</button>
+      <h2 data-t="rates">เรท (ย้อนหลังได้)</h2>
+      <div class="row"><select id="rateScope"><option value="shop">ร้าน</option><option value="staff">เด็ก</option></select><input id="rateId" type="number" placeholder="รหัสร้าน/เด็ก"><input id="rateAgent" type="number" placeholder="เรทเอเจนต์ 35–45"><input id="rateWorker" type="number" placeholder="เรทเด็ก 25–45"></div>
+      <input type="date" id="rateFrom"><button onclick="setRate()" data-t="setRate">บันทึกเรท (ระบุวันเริ่มมีผล)</button>
+      <h2 data-t="special">วันเรท 1.5 เท่า</h2>
+      <input type="date" id="spDate"><button onclick="setSpecial()" data-t="setSpecial">ตั้งเป็นวัน 1.5x</button>
+      <h2 data-t="phEve">คืนก่อนวันหยุดนักขัตฤกษ์ (Bae's ปิดตี 4)</h2>
+      <p class="muted" data-t="phEveNote">วันที่ตั้งไว้แล้ว: 7 พ.ย. 2026 (Deepavali eve), 24 ธ.ค. 2026 (Christmas eve), 31 ธ.ค. 2026 (New Year's eve) — เพิ่มวันอื่นได้ตรงนี้</p>
+      <input type="date" id="pheDate"><button onclick="setPhEve()" data-t="setPhEve">ตั้งเป็นคืนก่อนวันหยุด</button>
+      <h2 data-t="accessLog">ประวัติการเข้าใช้แอป</h2>
+      <button class="ghost" onclick="loadActivity()" data-t="showLog">ดูประวัติ</button>
+      <div id="activityBox"></div>
+      <h2 data-t="otpTitle">รหัส OTP ทดลอง (เจ้าของเห็นเท่านั้น)</h2>
+      <p class="muted" data-t="otpOwnerNote">ทดลอง: ไม่ได้ส่ง SMS จริง รหัสจะขึ้นตรงนี้ เจ้าของส่งรหัสให้เด็กทาง WhatsApp เอง รหัสใช้ได้ 10 นาที</p>
+      <button class="ghost" onclick="loadOtps()" data-t="showOtps">ดูรหัส OTP</button>
+      <div id="otpBox2"></div>
+      <h2 data-t="revoke">ปิด/เปิดลิงก์สาธารณะ</h2>
+      <p class="muted" data-t="revokeNote">ถ้าลิงก์หลุดไปถึงคนนอก กดปิดตรงนี้ได้ทันที ทุกคนจะเปิดแอปไม่ได้จนกว่าเธอจะเปิดกลับ (ไม่ต้องเปลี่ยนลิงก์)</p>
+      <button class="danger" onclick="setAccess(false)" data-t="disableLink">ปิดลิงก์สาธารณะ</button>
+      <button onclick="setAccess(true)" data-t="enableLink">เปิดลิงก์กลับ</button>
+      <h2 data-t="changePin">เปลี่ยน PIN</h2>
+      <div class="row"><input id="chgRole" value="owner"><input id="chgCurrent" placeholder="PIN เจ้าของปัจจุบัน"><input id="chgNew" placeholder="PIN ใหม่"></div>
+      <button onclick="changePin()" data-t="changePinBtn">เปลี่ยน PIN</button>
+    </div>
+  </div>
+</div>
+<script>
+let LANG='th', staffToken=null, me=null, ownerToken=null, adminToken=null, shops=[], availSet=new Set(), groupSel=new Set(), riderSel=new Set();
+const T={
+th:{loginTitle:'เข้าสู่ระบบพนักงาน',loginNote:'กรอกชื่อและเบอร์มือถือที่ลงทะเบียนไว้กับเจ้าของ ถ้าชื่อหรือเบอร์ไม่ตรง จะเปิดแอปไม่ได้',yourName:'ชื่อของคุณ',yourPhone:'เบอร์มือถือ',enter:'เข้าแอป',sendOtp:'ส่งรหัส OTP',otpLabel:'รหัส OTP 6 หลัก',otpNote:'รหัสใช้ได้ 10 นาที เจ้าของจะส่งรหัสให้ทาง WhatsApp (ทดลอง: ไม่ได้ส่ง SMS จริง รหัสอยู่ในหน้าเจ้าของ)',verifyOtp:'ยืนยันรหัส',otpTitle:'รหัส OTP ทดลอง (เจ้าของเห็นเท่านั้น)',otpOwnerNote:'ทดลอง: ไม่ได้ส่ง SMS จริง รหัสจะขึ้นตรงนี้ เจ้าของส่งรหัสให้เด็กทาง WhatsApp เอง รหัสใช้ได้ 10 นาที',showOtps:'ดูรหัส OTP',adminsTitle:'แอดมิน (สูงสุด 3 คน — จัดตารางได้อย่างเดียว ไม่เห็นยอดเงิน)',adminsNote:'แอดมินแต่ละคนมีชื่อและ PIN ของตัวเอง ประวัติการเข้าใช้จะบอกว่าแอดมินคนไหนทำอะไร',addAdmin:'เพิ่มแอดมิน',transport:'กลับบ้านยังไง',companyAt:'เวลารถบริษัทออก (ถ้าใช้รถบริษัท)',phEve:'คืนก่อนวันหยุดนักขัตฤกษ์ (Bae\'s ปิดตี 4)',phEveNote:'วันที่ตั้งไว้แล้ว: 7 พ.ย. 2026 (Deepavali eve), 24 ธ.ค. 2026 (Christmas eve), 31 ธ.ค. 2026 (New Year\'s eve) — เพิ่มวันอื่นได้ตรงนี้',setPhEve:'ตั้งเป็นคืนก่อนวันหยุด',ownerHint:'เจ้าของ / แอดมิน: ตั้ง PIN ครั้งแรกด้านล่าง แล้วเข้าโซนของตัวเอง',setPin:'ตั้ง PIN',enterPin:'เข้าโซน PIN',clockTitle:'ตอกบัตร',shop:'ร้าน',covers:'แทนงานให้ใคร (ถ้ามี)',groupMode:'ตอกเป็นกลุ่ม (2–3 คน เลือกชื่อเพิ่มด้านล่าง)',groupMembers:'เพื่อนร่วมกะ',photo:'ถ่ายรูปยืนยัน',clockIn:'ตอกบัตรเข้า',clockOut:'ตอกบัตรออก',taxiAmt:'ค่าแท็กซี่ ($)',taxiPayer:'ใครจ่ายค่าแท็กซี่',receiptNo:'เลขใบเสร็จแท็กซี่',riders:'คนนั่งรถมาด้วย',receiptPhoto:'รูปบิลแท็กซี่',photoOut:'ถ่ายรูปตอนออก',confirmOut:'ยืนยันตอกออก',myHours:'ชั่วโมงของฉัน (ไม่มียอดเงิน)',show:'ดู',availTitle:'ลงวันว่าง (ล่วงหน้า 3 เดือน)',availNote:'แตะวันที่ว่าง แล้วกดบันทึก',save:'บันทึกวันว่าง',todayTitle:'Status วันนี้',findTitle:'หาคนแทน',find:'ค้นหา',adminTitle:'แอดมิน — จัดตาราง (ไม่เห็นยอดเงิน)',addShift:'เพิ่มกะ',showSched:'ดูตาราง',backfill:'ลงกะย้อนหลัง',addBackfill:'ลงกะย้อนหลัง',alerts:'กะที่ขาดคน',checkAlerts:'เช็กกะขาดคน',ownerTitle:'เจ้าของ — ยอดเงิน (เฉพาะเจ้าของ)',showSummary:'ดูสรุปยอด',bills:'บิลส่งบริษัท / ส่งร้าน',dlDirect:'โหลดบิล Nicha (Date/Timing/Hr/1.5/Total)',dlBng:'โหลดบิล BNG ต่อร้าน',dlXlsx:'โหลด Excel สำรองทั้งเดือน (.xlsx)',staffDir:'รายชื่อพนักงาน + เบอร์มือถือ',phoneNote:'ใส่เบอร์มือถือของเด็กแต่ละคนไว้ตรงนี้ เด็กจะเข้าแอปได้ก็ต่อเมื่อกรอกชื่อ+เบอร์ตรงกับที่ลงไว้ ถอดเบอร์ออกหรือปิดชื่อ = บล็อกทันที ไม่ต้องเปลี่ยนลิงก์',addStaff:'เพิ่มพนักงาน',rates:'เรท (ย้อนหลังได้)',setRate:'บันทึกเรท (ระบุวันเริ่มมีผล)',special:'วันเรท 1.5 เท่า',setSpecial:'ตั้งเป็นวัน 1.5x',accessLog:'ประวัติการเข้าใช้แอป',showLog:'ดูประวัติ',revoke:'ปิด/เปิดลิงก์สาธารณะ',revokeNote:'ถ้าลิงก์หลุดไปถึงคนนอก กดปิดตรงนี้ได้ทันที ทุกคนจะเปิดแอปไม่ได้จนกว่าเธอจะเปิดกลับ (ไม่ต้องเปลี่ยนลิงก์)',disableLink:'ปิดลิงก์สาธารณะ',enableLink:'เปิดลิงก์กลับ',changePin:'เปลี่ยน PIN',changePinBtn:'เปลี่ยน PIN'},
+en:{loginTitle:'Staff login',loginNote:'Enter your registered name and mobile number. If they do not match, you cannot open the app.',yourName:'Your name',yourPhone:'Mobile number',enter:'Enter app',sendOtp:'Send OTP code',otpLabel:'6-digit OTP code',otpNote:'Code valid for 10 minutes. The owner will send it to you on WhatsApp (trial: no real SMS is sent — the code is in the owner area).',verifyOtp:'Verify code',otpTitle:'Trial OTP codes (owner only)',otpOwnerNote:'Trial: no real SMS is sent. Codes appear here; send a code to the staff member yourself on WhatsApp. Codes expire after 10 minutes.',showOtps:'View OTP codes',adminsTitle:'Admins (max 3 — scheduling only, no money)',adminsNote:'Each admin has their own name and PIN. The activity log shows which admin did what.',addAdmin:'Add admin',transport:'How are you getting home',companyAt:'Company transport departure time (if using it)',phEve:'Public-holiday eve (Bae\'s closes 4am)',phEveNote:'Already set: 7 Nov 2026 (Deepavali eve), 24 Dec 2026 (Christmas eve), 31 Dec 2026 (New Year\'s eve) — add more dates here.',setPhEve:'Set as holiday eve',ownerHint:'Owner / Admin: set a PIN below first, then enter your area.',setPin:'Set PIN',enterPin:'Enter PIN area',clockTitle:'Clock in / out',shop:'Shop',covers:'Covering for (if any)',groupMode:'Group clock-in (2–3 people, pick more names below)',groupMembers:'Group members',photo:'Photo confirmation',clockIn:'Clock in',clockOut:'Clock out',taxiAmt:'Taxi amount ($)',taxiPayer:'Who paid the taxi',receiptNo:'Taxi receipt no.',riders:'Riders',receiptPhoto:'Taxi receipt photo',photoOut:'Photo on clock-out',confirmOut:'Confirm clock-out',myHours:'My hours (no pay shown)',show:'Show',availTitle:'Availability (3 months ahead)',availNote:'Tap the days you are free, then save.',save:'Save availability',todayTitle:"Today's status",findTitle:'Find a replacement',find:'Search',adminTitle:'Admin — scheduling only (no money)',addShift:'Add shift',showSched:'View schedule',backfill:'Backdated shift entry',addBackfill:'Add backdated shift',alerts:'Short-staffed shifts',checkAlerts:'Check shortages',ownerTitle:'Owner — money (owner only)',showSummary:'View summary',bills:'Bills to company / shop',dlDirect:'Download Nicha direct bill',dlBng:'Download BNG shop bill',dlXlsx:'Download monthly Excel backup (.xlsx)',staffDir:'Staff directory + phone numbers',phoneNote:'Enter each staff member’s phone here. Staff can only enter the app with a matching name + phone. Remove the phone or deactivate the name to block instantly — no link change needed.',addStaff:'Add staff',rates:'Rates (can be backdated)',setRate:'Save rate (with effective date)',special:'1.5x rate days',setSpecial:'Set as 1.5x day',accessLog:'App access history',showLog:'View history',revoke:'Disable / enable public link',revokeNote:'If the link leaks, disable it here instantly. Nobody can open the app until you re-enable it.',disableLink:'Disable public link',enableLink:'Enable link again',changePin:'Change PIN',changePinBtn:'Change PIN'}};
+function setLang(l){LANG=l;document.querySelectorAll('[data-t]').forEach(e=>{const k=e.dataset.t;if(T[l][k])e.textContent=T[l][k]});}
+async function api(path,opts={}){const r=await fetch(path,{...opts,headers:{'Content-Type':'application/json',...(opts.token?{Authorization:'Bearer '+opts.token}:{}),...(opts.headers||{})}});const t=await r.text();let j;try{j=JSON.parse(t)}catch(e){j={raw:t}}if(!r.ok)throw new Error(j.error||('HTTP '+r.status));return j;}
+function fileData(id){return new Promise(res=>{const f=document.getElementById(id).files[0];if(!f)return res('');const rd=new FileReader();rd.onload=()=>{const img=new Image();img.onload=()=>{const c=document.createElement('canvas');const s=Math.min(1,900/Math.max(img.width,img.height));c.width=img.width*s;c.height=img.height*s;c.getContext('2d').drawImage(img,0,0,c.width,c.height);res(c.toDataURL('image/jpeg',0.65))};img.src=rd.result};rd.readAsDataURL(f)})}
+async function loadDir(){const d=await api('/api/directory');shops=d.shops;const fill=(id)=>{const el=document.getElementById(id);el.innerHTML=shops.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')};['shopSel','findShop','schShop','bfShop','billShop'].forEach(fill);}
+async function staffLogin(){
+  const name=document.getElementById('loginName').value.trim(), phone=document.getElementById('loginPhone').value.trim();
+  try{const d=await api('/api/staff-login',{method:'POST',body:JSON.stringify({name,phone})});
+    window._otpName=name;window._otpPhone=phone;
+    document.getElementById('otpBox').style.display='block';
+    document.getElementById('loginErr').textContent='✅ OTP sent — ask the owner for the code (trial: owner sees it in the owner area). Expires in 10 min.';}
+  catch(e){document.getElementById('loginErr').textContent=e.message;}
+}
+async function verifyOtp(){
+  const code=document.getElementById('otpCode').value.trim();
+  try{const d=await api('/api/staff-verify-otp',{method:'POST',body:JSON.stringify({name:window._otpName,phone:window._otpPhone,code})});
+    staffToken=d.token;me=d;localStorage.setItem('crewup_device',d.device_token);
+    enterApp();}
+  catch(e){document.getElementById('otpErr').textContent=e.message;}
+}
+async function deviceLogin(){
+  const dev=localStorage.getItem('crewup_device');if(!dev)return false;
+  try{const d=await api('/api/staff-device-login',{method:'POST',body:JSON.stringify({device_token:dev})});
+    staffToken=d.token;me=d;enterApp();return true;}catch(e){localStorage.removeItem('crewup_device');return false;}
+}
+async function enterApp(){
+  document.getElementById('login').style.display='none';document.getElementById('app').style.display='block';
+  document.getElementById('who').textContent='👤 '+me.name;
+  await loadDir();buildTabs();refreshMe();
+}
+function buildTabs(){
+  const tabs=[['clock','⏱ Clock'],['hours','📅 My hours'],['avail','✅ Availability'],['today','📊 Today'],['find','🔍 Find cover'],['admin','🗓 Admin'],['owner','💰 Owner']];
+  document.getElementById('tabs').innerHTML=tabs.map(([k,l])=>`<button onclick="showTab('${k}')">${l}</button>`).join('');
+  // staff name lists for admin/owner selects come from owner directory; staff can still clock in/out and view own data
+  const opts=async()=>{try{const d=await api('/api/owner/staff',{token:ownerToken});return d.staff}catch(e){return[]}};
+  window._staffOpts=opts;
+}
+function showTab(k){['clock','hours','avail','today','find','admin','owner'].forEach(x=>document.getElementById('tab-'+x).style.display=x===k?'block':'none');if(k==='today')loadToday();if(k==='avail')buildAvailCal();}
+async function refreshMe(){
+  document.getElementById('meLine').textContent=me?('Logged in as '+me.name):'';
+  const cov=document.getElementById('coverSel');cov.innerHTML='<option value="">—</option>';
+  // group pills: use staff names from a staff-visible list via schedule? Use owner list if available, else just self.
+  const st=await api('/api/my-status?staff_id='+me.staff_id,{token:staffToken}).catch(()=>null);
+  if(st&&st.open){document.getElementById('openShift').textContent='⏱ Clocked in at '+st.open.shop+' since '+new Date(st.open.clock_in).toLocaleTimeString();document.getElementById('clockOutBox').style.display='block';window._openId=st.open.id;}
+  else{document.getElementById('openShift').textContent='Not clocked in.';document.getElementById('clockOutBox').style.display='none';}
+}
+async function clockIn(){
+  const photo=await fileData('photoIn');
+  const ids=[me.staff_id];if(document.getElementById('groupMode').checked){groupSel.forEach(id=>ids.push(id));}
+  try{const d=await api('/api/clock-in',{method:'POST',token:staffToken,body:JSON.stringify({staff_ids:ids,shop_id:Number(document.getElementById('shopSel').value),covers_for_id:Number(document.getElementById('coverSel').value)||null,photo})});
+    document.getElementById('clockMsg').textContent='✅ '+JSON.stringify(d.results);refreshMe();}catch(e){document.getElementById('clockMsg').textContent='❌ '+e.message;}
+}
+function clockOut(){document.getElementById('clockOutBox').style.display='block';}
+async function doClockOut(){
+  const photo=await fileData('photoOut'), receipt=await fileData('receiptPhoto');
+  try{const d=await api('/api/clock-out',{method:'POST',token:staffToken,body:JSON.stringify({record_id:window._openId,photo,transport_mode:document.getElementById('transportMode').value,company_transport_at:document.getElementById('companyAt').value,taxi_amount:Number(document.getElementById('taxiAmt').value||0),taxi_payer:document.getElementById('taxiPayer').value,taxi_receipt_no:document.getElementById('taxiReceipt').value,riders:[...riderSel],receipt_photo:receipt})});
+    document.getElementById('clockMsg').textContent='✅ Clocked out, '+d.hours+'h'+(d.warnings&&d.warnings.length?' ⚠️ '+d.warnings.join('; '):'');refreshMe();}catch(e){document.getElementById('clockMsg').textContent='❌ '+e.message;}
+}
+async function loadMyHours(){
+  const m=document.getElementById('hoursMonth').value||new Date().toISOString().slice(0,7);
+  const d=await api('/api/my-hours?staff_id='+me.staff_id+'&month='+m,{token:staffToken});
+  document.getElementById('myHours').innerHTML='<p>Total hours: <b>'+d.total_hours+'</b> · Taxi: $'+d.taxi_total+'</p>'+d.records.map(r=>`<div>${r.date} · ${r.shop} · ${r.hours||''}h ${r.is_15x?'(1.5x)':''} ${r.covers_for?('covers '+r.covers_for):''} ${r.transport_mode==='company'?'(company transport)':''} ${r.taxi_warning?('⚠️ '+r.taxi_warning):''}</div>`).join('');
+}
+function buildAvailCal(){
+  const box=document.getElementById('availCal');box.innerHTML='';
+  const today=new Date();
+  for(let i=0;i<90;i++){const d=new Date(today);d.setDate(d.getDate()+i);const s=d.toISOString().slice(0,10);
+    const b=document.createElement('button');b.className='ghost';b.style.padding='6px';b.textContent=s.slice(5);b.onclick=()=>{if(availSet.has(s)){availSet.delete(s);b.style.background=''}else{availSet.add(s);b.style.background='#0d7a5f';b.style.color='#fff'}};box.appendChild(b);}
+}
+async function saveAvail(){await api('/api/availability',{method:'POST',token:staffToken,body:JSON.stringify({staff_id:me.staff_id,dates:[...availSet],available:true})});alert('Saved');}
+async function loadToday(){
+  const d=await api('/api/today-status',{token:staffToken});
+  document.getElementById('todayBox').innerHTML=d.shops.map(s=>`<div><b>${s.shop}</b> — clocked in ${s.clocked_in_count} / scheduled ${s.scheduled_count}<br>${s.scheduled.map(x=>x.staff+(x.clocked_in?' ✅':' ⏳')).join(', ')||'—'}</div>`).join('');
+}
+async function findRepl(){
+  const d=await api('/api/replacements?date='+document.getElementById('findDate').value+'&shop_id='+document.getElementById('findShop').value,{token:staffToken});
+  document.getElementById('findBox').innerHTML=d.candidates.map(c=>`<div>${c.name} ${c.available?'✅ available':''} ${c.scheduled_here?'· scheduled here':''} ${c.already_working?'· already working':''}</div>`).join('');
+}
+async function pinSetup(){try{await api('/api/pin/setup',{method:'POST',body:JSON.stringify({role:document.getElementById('pinRole').value,pin:document.getElementById('pinCode').value,current_pin:document.getElementById('pinCode').value})});alert('PIN set');}catch(e){document.getElementById('pinErr').textContent=e.message;}}
+async function pinVerify(){
+  const role=document.getElementById('pinRole').value, pin=document.getElementById('pinCode').value;
+  const name=document.getElementById('pinName').value.trim();
+  try{const d=await api('/api/pin/verify',{method:'POST',body:JSON.stringify({role,pin,name:name||undefined})});
+    if(role==='owner'){ownerToken=d.token;document.getElementById('ownerBody').style.display='block';loadOwner();}
+    else{adminToken=d.token;document.getElementById('adminBody').style.display='block';}
+    alert('PIN OK — '+role+(d.admin_name?' ('+d.admin_name+')':''));}catch(e){document.getElementById('pinErr').textContent=e.message;}
+}
+async function loadOwner(){
+  const d=await api('/api/owner/staff',{token:ownerToken});
+  const ad=await api('/api/owner/admins',{token:ownerToken});
+  document.getElementById('adminDir').innerHTML=ad.admins.map(a=>`<div>${a.name} · ${a.active?'active':'deactivated'} · <input data-adminpin="${a.id}" placeholder="PIN ใหม่" style="width:110px"> <button onclick="changeAdminPin(${a.id})">Change PIN</button> <button class="ghost" onclick="toggleAdmin(${a.id},${a.active?0:1})">${a.active?'Deactivate':'Activate'}</button></div>`).join('')||'No admins yet (max 3).';
+  document.getElementById('staffDir').innerHTML=d.staff.map(s=>`<div>${s.name} · phone: <input data-phone="${s.id}" value="${s.phone||''}" placeholder="add phone"> <button onclick="savePhone(${s.id})">Save phone</button> <button class="ghost" onclick="toggleStaff(${s.id},${s.active?0:1})">${s.active?'Deactivate (block)':'Activate'}</button> ${s.direct_company?'(direct to company)':''}</div>`).join('');
+  document.getElementById('billStaff').innerHTML=d.staff.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  const fill=(id)=>{document.getElementById(id).innerHTML=d.staff.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')};['schStaff','bfStaff','schCover'].forEach(fill);
+}
+async function addAdmin(){const n=document.getElementById('newAdminName').value,p=document.getElementById('newAdminPin').value;await api('/api/owner/admins',{method:'POST',token:ownerToken,body:JSON.stringify({name:n,pin:p})});loadOwner();}
+async function toggleAdmin(id,active){await api('/api/owner/admins/'+id,{method:'PATCH',token:ownerToken,body:JSON.stringify({active:!!active})});loadOwner();}
+async function changeAdminPin(id){const v=document.querySelector(`[data-adminpin="${id}"]`).value;await api('/api/owner/admins/'+id,{method:'PATCH',token:ownerToken,body:JSON.stringify({pin:v})});alert('Admin PIN changed');}
+async function savePhone(id){const v=document.querySelector(`[data-phone="${id}"]`).value;await api('/api/staff/'+id,{method:'PATCH',token:ownerToken,body:JSON.stringify({phone:v})});alert('Phone saved');}
+async function toggleStaff(id,active){await api('/api/staff/'+id,{method:'PATCH',token:ownerToken,body:JSON.stringify({active:!!active})});loadOwner();}
+async function addStaff(){const n=document.getElementById('newStaffName').value,p=document.getElementById('newStaffPhone').value;await api('/api/staff',{method:'POST',token:ownerToken,body:JSON.stringify({name:n,phone:p})});loadOwner();}
+async function addShift(){await api('/api/shift',{method:'POST',token:adminToken||ownerToken,body:JSON.stringify({staff_id:Number(document.getElementById('schStaff').value),shop_id:Number(document.getElementById('schShop').value),date:document.getElementById('schDate').value,time_start:document.getElementById('schStart').value,time_end:document.getElementById('schEnd').value,covers_for_id:Number(document.getElementById('schCover').value)||null})});alert('Shift added');}
+async function loadSchedule(){const d=await api('/api/schedule?from='+document.getElementById('schDate').value+'&to='+document.getElementById('schDate').value,{token:adminToken||ownerToken});document.getElementById('schedBox').innerHTML=d.shifts.map(s=>`${s.date} ${s.shop} ${s.staff} ${s.time_start}-${s.time_end} ${s.covers_for?('covers '+s.covers_for):''}`).join('<br>')||'—';}
+async function backfill(){await api('/api/backfill',{method:'POST',token:adminToken||ownerToken,body:JSON.stringify({staff_id:Number(document.getElementById('bfStaff').value),shop_id:Number(document.getElementById('bfShop').value),date:document.getElementById('bfDate').value,clock_in:document.getElementById('bfIn').value,clock_out:document.getElementById('bfOut').value})});alert('Backfilled');}
+async function loadAlerts(){const d=await api('/api/alerts?from='+new Date().toISOString().slice(0,10)+'&to='+new Date(Date.now()+7*864e5).toISOString().slice(0,10),{token:adminToken||ownerToken});document.getElementById('alertBox').innerHTML=d.alerts.map(a=>`${a.date} ${a.shop}: need ${a.required}, scheduled ${a.scheduled} — short ${a.short_by}`).join('<br>')||'No shortages';}
+async function loadSummary(){
+  const m=document.getElementById('sumMonth').value||new Date().toISOString().slice(0,7);
+  const d=await api('/api/owner/summary?month='+m,{token:ownerToken});
+  document.getElementById('summaryBox').innerHTML='<p>Agent total: <b>$'+d.total_agent+'</b> · Worker pay total: <b>$'+d.total_worker_pay+'</b></p>'+d.per_shop.map(s=>`<div><b>${s.shop}</b>: agent $${s.agent_total} · worker pay $${s.worker_pay} · taxi $${s.taxi_claimable} · reimburse $${s.taxi_reimburse}</div>`).join('')+d.per_staff.map(s=>`<div>${s.name}: ${s.hours}h · pay $${s.worker_pay} · taxi reimburse $${s.taxi_reimburse}</div>`).join('');
+}
+function dl(url){const a=document.createElement('a');a.href=url;a.download='';document.body.appendChild(a);a.click();a.remove();}
+async function dlBill(kind){
+  const m=document.getElementById('sumMonth').value||new Date().toISOString().slice(0,7);
+  const tok=ownerToken;
+  const url=kind==='direct'?`/api/bill/direct?staff_id=${document.getElementById('billStaff').value}&month=${m}`:`/api/bill/bng?shop_id=${document.getElementById('billShop').value}&month=${m}`;
+  const r=await fetch(url,{headers:{Authorization:'Bearer '+tok}});const blob=await r.blob();const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=kind+'-'+m+'.csv';a.click();
+}
+async function dlXlsx(){
+  const m=document.getElementById('sumMonth').value||new Date().toISOString().slice(0,7);
+  const r=await fetch('/api/export/xlsx?month='+m,{headers:{Authorization:'Bearer '+ownerToken}});if(!r.ok){alert('Export failed: '+await r.text());return;}
+  const blob=await r.blob();const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='crewup-backup-'+m+'.xlsx';a.click();
+}
+async function loadActivity(){const d=await api('/api/owner/activity',{token:ownerToken});document.getElementById('activityBox').innerHTML=d.log.map(l=>`<div>${l.created_at} · <b>${l.actor}</b> · ${l.action} · ${l.detail||''}</div>`).join('');}
+async function loadOtps(){const d=await api('/api/owner/otps',{token:ownerToken});document.getElementById('otpBox2').innerHTML='<p class="muted">'+d.trial_note+'</p>'+d.otps.map(o=>`<div><b>${o.staff}</b> · code: <b>${o.code}</b> · expires ${o.expires_at} · ${o.used?'used':'unused'} · attempts ${o.attempts}</div>`).join('');}
+async function setAccess(on){await api('/api/owner/access',{method:'POST',token:ownerToken,body:JSON.stringify({enabled:on})});alert(on?'Public link enabled':'Public link DISABLED — nobody can open the app now');}
+async function setRate(){await api('/api/rate',{method:'POST',token:ownerToken,body:JSON.stringify({scope:document.getElementById('rateScope').value,scope_id:Number(document.getElementById('rateId').value),agent_rate:Number(document.getElementById('rateAgent').value)||null,worker_rate:Number(document.getElementById('rateWorker').value)||null,effective_from:document.getElementById('rateFrom').value})});alert('Rate saved');}
+async function setSpecial(){await api('/api/special-day',{method:'POST',token:ownerToken,body:JSON.stringify({date:document.getElementById('spDate').value})});alert('1.5x day set');}
+async function setPhEve(){await api('/api/ph-eve',{method:'POST',token:ownerToken,body:JSON.stringify({date:document.getElementById('pheDate').value})});alert('Public-holiday eve set — Bae\'s closes 4am that night');}
+async function changePin(){await api('/api/pin/setup',{method:'POST',body:JSON.stringify({role:document.getElementById('chgRole').value,pin:document.getElementById('chgNew').value,current_pin:document.getElementById('chgCurrent').value})});alert('PIN changed');}
+document.getElementById('groupMode').addEventListener('change',e=>document.getElementById('groupBox').style.display=e.target.checked?'block':'none');
+setLang('th');
+loadDir().catch(()=>{});
+deviceLogin();
+</script></body></html>

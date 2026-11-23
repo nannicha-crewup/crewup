@@ -1,0 +1,8 @@
+crewup.db*
+data/
+*.log
+*.pid
+tunnel*.log
+dns-proxy.py
+start.sh
+stop.sh

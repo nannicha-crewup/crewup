@@ -1,0 +1,27 @@
+# CrewUp — one-click Render deploy (free tier, no card needed)
+# Steps for the owner (needs a browser, ~5 minutes):
+#   1. Push this folder to a GitHub repo.
+#   2. Sign up / log in at render.com (free, no card).
+#   3. Dashboard > New > Web Service > connect the repo.
+#      Render detects this render.yaml automatically.
+#   4. Create Web Service, plan: Free.
+#   5. The public URL will be https://crewup.onrender.com (or the name you pick).
+# Caveats:
+#   - Free instances spin down after 15 min idle; first request takes ~1 min to wake.
+#   - Free instances have an EPHEMERAL filesystem: crewup.db (SQLite) is lost
+#     on redeploy/restart. Keep the monthly Excel export as backup
+#     (owner area > Excel download) and re-import after a redeploy.
+#   - The local crewup.db in this folder currently has 0 clock records:
+#     the 36 November records (153.5 hrs) live in the Muse artifact app,
+#     not in this file. Re-seed them after deploy (backdated entry in the
+#     owner area) or copy a seeded DB into the repo before the first deploy.
+services:
+  - type: web
+    name: crewup
+    runtime: node
+    plan: free
+    buildCommand: npm install || true
+    startCommand: node server.js
+    envVars:
+      - key: PORT
+        value: 10000
