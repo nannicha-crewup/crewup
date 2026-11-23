@@ -585,6 +585,18 @@ async function handle(req, res) {
       else db.prepare('INSERT INTO requirements(shop_id,weekday,required_count) VALUES(?,?,?) ON CONFLICT(shop_id,weekday) DO UPDATE SET required_count=excluded.required_count').run(b.shop_id, b.weekday, b.count);
       send(res, 200, { ok: true }); return;
     }
+    if (p === '/api/requirements') {
+      const role = requireRole(req, res, ['owner', 'admin']); if (!role) return;
+      const sid = Number(u.searchParams.get('shop_id') || 0);
+      const from = u.searchParams.get('from') || '', to = u.searchParams.get('to') || '';
+      const weekly = db.prepare('SELECT weekday, required_count FROM requirements WHERE shop_id=?').all(sid);
+      const dates = (from && to) ? db.prepare('SELECT date, required_count FROM req_dates WHERE shop_id=? AND date BETWEEN ? AND ?').all(sid, from, to) : [];
+      send(res, 200, { weekly, dates }); return;
+    }
+    if (p === '/api/staff-names') {
+      const role = requireRole(req, res, ['owner', 'admin']); if (!role) return;
+      send(res, 200, { staff: db.prepare('SELECT id, name, direct_company FROM staff WHERE active=1 ORDER BY name').all() }); return;
+    }
     if (p === '/api/alerts') {
       const role = requireRole(req, res, ['owner', 'admin']); if (!role) return;
       const from = u.searchParams.get('from') || new Date().toISOString().slice(0, 10);

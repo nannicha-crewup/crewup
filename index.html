@@ -124,6 +124,21 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{border-bottom:1px
     </div>
   </div>
 
+  <div id="tab-roster" class="card" style="display:none">
+    <h2>🗓 จัดตารางทั้งเดือน — แตะชื่อแล้วแตะวัน</h2>
+    <div class="row" style="gap:8px;flex-wrap:wrap">
+      <input type="month" id="bdMonth">
+      <select id="bdShop"></select>
+      <button onclick="loadBoard()">โหลดตาราง</button>
+    </div>
+    <h3 style="margin:12px 0 4px">ต้องการเด็กกี่คน (แยกตามวันในสัปดาห์ — 0 = ร้านปิดวันนั้น)</h3>
+    <div id="bdReq" class="row" style="gap:6px;flex-wrap:wrap;align-items:center"></div>
+    <button onclick="saveReqs()">บันทึกจำนวนคน</button>
+    <p class="muted">แตะชื่อเด็กด้านล่างก่อน แล้วแตะวันที่จะให้ทำ — วันที่เด็กว่างจะมีขอบเขียว ถ้าเด็กไม่ได้ลงวันว่างไว้จะถามยืนยันก่อน แตะชื่อที่ลงไว้ในช่องวันเพื่อเอาออก</p>
+    <div id="bdStaff" style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0"></div>
+    <div id="bdGrid" style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px"></div>
+  </div>
+
   <div id="tab-owner" class="card" style="display:none">
     <h2 data-t="ownerTitle">เจ้าของ — ยอดเงิน (เฉพาะเจ้าของ)</h2>
     <div id="ownerGate"><p class="muted">ต้องใส่ PIN เจ้าของก่อน</p></div>
@@ -187,7 +202,7 @@ en:{loginTitle:'Staff login',loginNote:'Enter your registered name and mobile nu
 function setLang(l){LANG=l;document.querySelectorAll('[data-t]').forEach(e=>{const k=e.dataset.t;if(T[l][k])e.textContent=T[l][k]});}
 async function api(path,opts={}){const r=await fetch(path,{...opts,headers:{'Content-Type':'application/json',...(opts.token?{Authorization:'Bearer '+opts.token}:{}),...(opts.headers||{})}});const t=await r.text();let j;try{j=JSON.parse(t)}catch(e){j={raw:t}}if(!r.ok)throw new Error(j.error||('HTTP '+r.status));return j;}
 function fileData(id){return new Promise(res=>{const f=document.getElementById(id).files[0];if(!f)return res('');const rd=new FileReader();rd.onload=()=>{const img=new Image();img.onload=()=>{const c=document.createElement('canvas');const s=Math.min(1,900/Math.max(img.width,img.height));c.width=img.width*s;c.height=img.height*s;c.getContext('2d').drawImage(img,0,0,c.width,c.height);res(c.toDataURL('image/jpeg',0.65))};img.src=rd.result};rd.readAsDataURL(f)})}
-async function loadDir(){const d=await api('/api/directory');shops=d.shops;const fill=(id)=>{const el=document.getElementById(id);el.innerHTML=shops.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')};['shopSel','findShop','schShop','bfShop','billShop','leaveShop'].forEach(fill);}
+async function loadDir(){const d=await api('/api/directory');shops=d.shops;const fill=(id)=>{const el=document.getElementById(id);el.innerHTML=shops.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')};['shopSel','findShop','schShop','bfShop','billShop','leaveShop','bdShop'].forEach(fill);}
 async function staffLogin(){
   const name=document.getElementById('loginName').value.trim(), phone=document.getElementById('loginPhone').value.trim();
   try{const d=await api('/api/staff-login',{method:'POST',body:JSON.stringify({name,phone})});
@@ -214,13 +229,13 @@ async function enterApp(){
   await loadDir();buildTabs();refreshMe();
 }
 function buildTabs(){
-  const tabs=[['clock','⏱ Clock'],['hours','📅 My hours'],['avail','✅ Availability'],['today','📊 Today'],['find','🔍 Find cover'],['admin','🗓 Admin'],['owner','💰 Owner']];
+  const tabs=[['clock','⏱ Clock'],['hours','📅 My hours'],['avail','✅ Availability'],['today','📊 Today'],['find','🔍 Find cover'],['admin','🗓 Admin'],['roster','🗓 ตารางเดือน'],['owner','💰 Owner']];
   document.getElementById('tabs').innerHTML=tabs.map(([k,l])=>`<button onclick="showTab('${k}')">${l}</button>`).join('');
   // staff name lists for admin/owner selects come from owner directory; staff can still clock in/out and view own data
   const opts=async()=>{try{const d=await api('/api/owner/staff',{token:ownerToken});return d.staff}catch(e){return[]}};
   window._staffOpts=opts;
 }
-function showTab(k){['clock','hours','avail','today','find','admin','owner'].forEach(x=>document.getElementById('tab-'+x).style.display=x===k?'block':'none');if(k==='today')loadToday();if(k==='avail')buildAvailCal();}
+function showTab(k){['clock','hours','avail','today','find','admin','roster','owner'].forEach(x=>document.getElementById('tab-'+x).style.display=x===k?'block':'none');if(k==='today')loadToday();if(k==='avail')buildAvailCal();if(k==='roster')loadBoard();}
 async function refreshMe(){
   document.getElementById('meLine').textContent=me?('Logged in as '+me.name):'';
   const cov=document.getElementById('coverSel');cov.innerHTML='<option value="">—</option>';
@@ -365,6 +380,85 @@ async function addShift(){await api('/api/shift',{method:'POST',token:adminToken
 async function loadSchedule(){const d=await api('/api/schedule?from='+document.getElementById('schDate').value+'&to='+document.getElementById('schDate').value,{token:adminToken||ownerToken});document.getElementById('schedBox').innerHTML=d.shifts.map(s=>`${s.date} ${s.shop} ${s.staff} ${s.time_start}-${s.time_end} ${s.covers_for?('covers '+s.covers_for):''}`).join('<br>')||'—';}
 async function backfill(){await api('/api/backfill',{method:'POST',token:adminToken||ownerToken,body:JSON.stringify({staff_id:Number(document.getElementById('bfStaff').value),shop_id:Number(document.getElementById('bfShop').value),date:document.getElementById('bfDate').value,clock_in:document.getElementById('bfIn').value,clock_out:document.getElementById('bfOut').value})});alert('Backfilled');}
 async function loadAlerts(){const d=await api('/api/alerts?from='+new Date().toISOString().slice(0,10)+'&to='+new Date(Date.now()+7*864e5).toISOString().slice(0,10),{token:adminToken||ownerToken});document.getElementById('alertBox').innerHTML=d.alerts.map(a=>`${a.date} ${a.shop}: need ${a.required}, scheduled ${a.scheduled} — short ${a.short_by}`).join('<br>')||'No shortages';}
+let bdSel=null, bdData=null;
+const CORE_ORDER=['Nicha','Nonney','Pear','Natty','Koiz'];
+const WD_TH=['อา','จ','อ','พ','พฤ','ศ','ส'];
+async function loadBoard(){
+  const token=adminToken||ownerToken;
+  if(!token){document.getElementById('bdGrid').innerHTML='<p>หน้านี้สำหรับเจ้าของ/แอดมิน — ใส่ PIN เข้าโซนก่อน</p>';return;}
+  const m=document.getElementById('bdMonth').value||new Date().toISOString().slice(0,7);
+  document.getElementById('bdMonth').value=m;
+  const shopId=Number(document.getElementById('bdShop').value);
+  const [y,mo]=m.split('-').map(Number);
+  const from=m+'-01', to=m+'-'+new Date(y,mo,0).getDate();
+  const [rq,sc,av,st]=await Promise.all([
+    api('/api/requirements?shop_id='+shopId+'&from='+from+'&to='+to,{token}),
+    api('/api/schedule?from='+from+'&to='+to,{token}),
+    api('/api/availability?from='+from+'&to='+to,{token}),
+    api('/api/staff-names',{token}),
+  ]);
+  const req={};rq.weekly.forEach(r=>req[r.weekday]=r.required_count);
+  const ov={};rq.dates.forEach(r=>ov[r.date]=r.required_count);
+  bdData={m,shopId,req,ov,allShifts:sc.shifts,shifts:sc.shifts.filter(s=>s.shop_id===shopId),avail:new Set(av.rows.map(r=>r.staff_id+'|'+r.date)),staff:st.staff,from,to};
+  document.getElementById('bdReq').innerHTML=WD_TH.map((w,i)=>`${w} <input data-reqwd="${i}" type="number" min="0" value="${req[i]??''}" placeholder="0" style="width:56px">`).join(' ');
+  renderBoard();
+}
+function reqFor(dateStr,wd){const d=bdData;return d.ov[dateStr]??d.req[wd]??0;}
+function renderBoard(){
+  const d=bdData;if(!d)return;
+  const counts={};d.shifts.forEach(s=>counts[s.staff_id]=(counts[s.staff_id]||0)+1);
+  const order=[...d.staff].sort((a,b)=>{
+    const ai=CORE_ORDER.indexOf(a.name),bi=CORE_ORDER.indexOf(b.name);
+    if(ai>=0||bi>=0)return (ai<0?99:ai)-(bi<0?99:bi);
+    return (counts[a.id]||0)-(counts[b.id]||0);
+  });
+  document.getElementById('bdStaff').innerHTML=order.map(s=>`<button style="padding:6px 10px;${bdSel===s.id?'background:#0d7a5f;color:#fff':''}" onclick="bdSel=${bdSel===s.id?null:s.id};renderBoard()">${s.name} (${counts[s.id]||0})</button>`).join('');
+  const [y,mo]=d.m.split('-').map(Number);
+  const days=new Date(y,mo,0).getDate();
+  const firstWd=new Date(y,mo-1,1).getDay();
+  let cells='';
+  for(let i=0;i<firstWd;i++)cells+='<div></div>';
+  for(let day=1;day<=days;day++){
+    const dt=d.m+'-'+String(day).padStart(2,'0');
+    const wd=new Date(y,mo-1,day).getDay();
+    const need=reqFor(dt,wd);
+    const list=d.shifts.filter(s=>s.date===dt);
+    const isAv=bdSel!=null&&d.avail.has(bdSel+'|'+dt);
+    const full=need>0&&list.length>=need, short=need>0&&list.length<need;
+    cells+='<div onclick="boardTapDay(\''+dt+'\')" style="border:2px solid '+(bdSel!=null?(isAv?'#0d7a5f':'#ccc'):'#ddd')+';border-radius:8px;padding:6px;min-height:64px;cursor:pointer;background:'+(need===0?'#f2f2f2':full?'#e6f4ec':short?'#fff7e0':'#fff')+'">'
+      +'<b>'+day+'</b> <span class="muted">'+WD_TH[wd]+'</span><br>'
+      +'<span style="font-size:12px">'+(need===0?'ปิด':'ต้องการ '+need+' · ลงแล้ว '+list.length)+'</span><br>'
+      +list.map(s=>'<span onclick="event.stopPropagation();removeShift('+s.id+',\''+s.staff+'\')" style="display:inline-block;background:#dcefe7;border-radius:10px;padding:1px 7px;margin:1px;font-size:12px;cursor:pointer">'+s.staff+' ×</span>').join('')
+      +'</div>';
+  }
+  document.getElementById('bdGrid').innerHTML=cells;
+}
+async function saveReqs(){
+  const shopId=Number(document.getElementById('bdShop').value);
+  const token=adminToken||ownerToken;
+  for(const el of document.querySelectorAll('[data-reqwd]')){
+    if(el.value==='')continue;
+    await api('/api/requirement',{method:'POST',token,body:JSON.stringify({shop_id:shopId,weekday:Number(el.dataset.reqwd),count:Number(el.value)})});
+  }
+  alert('บันทึกแล้ว');loadBoard();
+}
+async function boardTapDay(dt){
+  const d=bdData;if(!d)return;
+  if(bdSel==null){alert('แตะชื่อเด็กก่อน แล้วค่อยแตะวันที่จะให้ทำ');return;}
+  const st=d.staff.find(s=>s.id===bdSel);
+  const wd=new Date(dt+'T00:00:00').getDay();
+  const need=reqFor(dt,wd);
+  if(d.shifts.some(s=>s.date===dt&&s.staff_id===bdSel)){alert(st.name+' ลงกะวันนี้ที่ร้านนี้แล้ว');return;}
+  if(d.allShifts.some(s=>s.date===dt&&s.staff_id===bdSel)){if(!confirm(st.name+' มีกะที่ร้านอื่นวันนี้แล้ว จะลงเพิ่มอีกไหม?'))return;}
+  if(need===0){if(!confirm('วันนี้ตั้งไว้ว่าต้องการ 0 คน (ร้านปิด) จะลงกะให้ '+st.name+' อยู่ไหม?'))return;}
+  if(!d.avail.has(bdSel+'|'+dt)){if(!confirm(st.name+' ไม่ได้ลงวันว่างวันนี้ จะลงกะให้อยู่ไหม?'))return;}
+  const isBaes=(shops.find(s=>s.id===d.shopId)||{}).name==="Bae's";
+  const body={staff_id:bdSel,shop_id:d.shopId,date:dt,time_start:'23:00'};
+  if(!isBaes)body.time_end=wd===6?'04:00':'03:00';
+  await api('/api/shift',{method:'POST',token:adminToken||ownerToken,body:JSON.stringify(body)});
+  loadBoard();
+}
+async function removeShift(id,name){if(!confirm('เอากะของ '+name+' วันนี้ออก?'))return;await api('/api/shift/'+id,{method:'DELETE',token:adminToken||ownerToken});loadBoard();}
 async function loadSummary(){
   const m=document.getElementById('sumMonth').value||new Date().toISOString().slice(0,7);
   const d=await api('/api/owner/summary?month='+m,{token:ownerToken});
