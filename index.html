@@ -247,8 +247,8 @@ async function pinVerify(){
   const role=document.getElementById('pinRole').value, pin=document.getElementById('pinCode').value;
   const name=document.getElementById('pinName').value.trim();
   try{const d=await api('/api/pin/verify',{method:'POST',body:JSON.stringify({role,pin,name:name||undefined})});
-    if(role==='owner'){ownerToken=d.token;document.getElementById('ownerBody').style.display='block';loadOwner();}
-    else{adminToken=d.token;document.getElementById('adminBody').style.display='block';}
+    if(role==='owner'){ownerToken=d.token;document.getElementById('app').style.display='block';document.getElementById('tab-owner').style.display='block';document.getElementById('ownerBody').style.display='block';buildTabs();loadOwner();document.getElementById('tab-owner').scrollIntoView();}
+    else{adminToken=d.token;document.getElementById('app').style.display='block';document.getElementById('tab-admin').style.display='block';document.getElementById('adminBody').style.display='block';buildTabs();document.getElementById('tab-admin').scrollIntoView();}
     alert('PIN OK — '+role+(d.admin_name?' ('+d.admin_name+')':''));}catch(e){document.getElementById('pinErr').textContent=e.message;}
 }
 async function loadOwner(){
