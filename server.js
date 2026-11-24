@@ -263,7 +263,7 @@ async function handle(req, res) {
   const u = new URL(req.url, 'http://x');
   const p = u.pathname;
   try {
-    if (p === '/' || p === '/index.html') { send(res, 200, fs.readFileSync(path.join(DIR, 'index.html'), 'utf8')); return; }
+    if (p === '/' || p === '/index.html') { send(res, 200, fs.readFileSync(path.join(DIR, 'index.html'), 'utf8'), { 'Cache-Control': 'no-store' }); return; }
     if (p === '/api/health') { send(res, 200, { ok: true, public_access: publicAccessOn() }); return; }
     if (p === '/api/directory') {
       if (!publicAccessOn()) return send(res, 403, { error: 'access_disabled' });
