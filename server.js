@@ -511,10 +511,16 @@ async function handle(req, res) {
       const today = new Date().toISOString().slice(0, 10);
       const out = [];
       for (const shop of SHOPS().filter(s => s.active)) {
-        const shifts = db.prepare('SELECT * FROM shifts WHERE shop_id=? AND date=?').all(shop.id, today);
+        const shifts = db.prepare('SELECT * FROM shifts WHERE shop_id=? AND date=? ORDER BY staff_id').all(shop.id, today);
         const recs = db.prepare('SELECT * FROM clock_records WHERE shop_id=? AND date=?').all(shop.id, today);
-        const inIds = new Set(recs.filter(r => r.clock_in).map(r => r.staff_id));
-        out.push({ shop_id: shop.id, shop: shop.name, scheduled: shifts.map(s => ({ staff: staffName(s.staff_id), clocked_in: inIds.has(s.staff_id) })), clocked_in_count: recs.filter(r => r.clock_in).length, clocked_out_count: recs.filter(r => r.clock_out).length, scheduled_count: shifts.length });
+        const recByStaff = {};
+        for (const r of recs) recByStaff[r.staff_id] = r;
+        const schedIds = new Set(shifts.map(s => s.staff_id));
+        const extra = recs.filter(r => !schedIds.has(r.staff_id)).map(r => ({ staff: staffName(r.staff_id), time_start: (r.clock_in || '').slice(11, 16), time_end: (r.clock_out || '').slice(11, 16), clocked_in: !!r.clock_in, clocked_out: !!r.clock_out, covers_for: r.covers_for_id ? staffName(r.covers_for_id) : null, unscheduled: true }));
+        out.push({ shop_id: shop.id, shop: shop.name,
+          scheduled: shifts.map(s => { const r = recByStaff[s.staff_id]; return { staff: staffName(s.staff_id), time_start: s.time_start || '', time_end: s.time_end || '', clocked_in: !!(r && r.clock_in), clocked_out: !!(r && r.clock_out), covers_for: s.covers_for_id ? staffName(s.covers_for_id) : null }; }),
+          extra,
+          clocked_in_count: recs.filter(r => r.clock_in).length, clocked_out_count: recs.filter(r => r.clock_out).length, scheduled_count: shifts.length });
       }
       send(res, 200, { date: today, shops: out }); return;
     }
