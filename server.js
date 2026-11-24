@@ -840,7 +840,13 @@ async function handle(req, res) {
       }
       const paidRows = db.prepare('SELECT staff_id, paid FROM pay_status WHERE month=?').all(month);
       const paidMap = {}; for (const pr of paidRows) paidMap[pr.staff_id] = pr.paid;
-      send(res, 200, { month, per_staff: Object.values(perStaff).map(s => ({ ...s, paid: paidMap[s.staff_id] || 0, hours: +s.hours.toFixed(2), worker_pay: +s.worker_pay.toFixed(2), agent_total: +s.agent_total.toFixed(2), taxi: +s.taxi.toFixed(2), taxi_reimburse: +s.taxi_reimburse.toFixed(2) })), per_shop: Object.values(perShop), total_agent: +Object.values(perShop).reduce((a, x) => a + x.agent_total, 0).toFixed(2), total_worker_pay: +Object.values(perShop).reduce((a, x) => a + x.worker_pay, 0).toFixed(2), taxi_warnings: recs.filter(r => r.taxi_warning).map(r => ({ date: r.date, staff: staffName(r.staff_id), shop: shopName(r.shop_id), warning: r.taxi_warning })) }); return;
+      // Scheduled hours for the month (from shifts) vs actual worked hours — so the
+      // owner can see at a glance whether hours match, per person.
+      for (const sh of db.prepare('SELECT staff_id, time_start, time_end FROM shifts WHERE date BETWEEN ? AND ?').all(from, to)) {
+        const s = perStaff[sh.staff_id] = perStaff[sh.staff_id] || { staff_id: sh.staff_id, name: staffName(sh.staff_id), paynow: (staffInfo[sh.staff_id] || {}).paynow || '', payname: (staffInfo[sh.staff_id] || {}).payname || '', hours: 0, worker_pay: 0, agent_total: 0, taxi: 0, taxi_reimburse: 0, by_shop: {} };
+        s.sched_hours = (s.sched_hours || 0) + shiftHours(sh.time_start, sh.time_end);
+      }
+      send(res, 200, { month, per_staff: Object.values(perStaff).map(s => ({ ...s, paid: paidMap[s.staff_id] || 0, hours: +s.hours.toFixed(2), sched_hours: +(s.sched_hours || 0).toFixed(2), worker_pay: +s.worker_pay.toFixed(2), agent_total: +s.agent_total.toFixed(2), taxi: +s.taxi.toFixed(2), taxi_reimburse: +s.taxi_reimburse.toFixed(2) })), per_shop: Object.values(perShop), total_agent: +Object.values(perShop).reduce((a, x) => a + x.agent_total, 0).toFixed(2), total_worker_pay: +Object.values(perShop).reduce((a, x) => a + x.worker_pay, 0).toFixed(2), taxi_warnings: recs.filter(r => r.taxi_warning).map(r => ({ date: r.date, staff: staffName(r.staff_id), shop: shopName(r.shop_id), warning: r.taxi_warning })) }); return;
     }
     if (p === '/api/owner/activity') { const role = requireRole(req, res, ['owner']); if (!role) return; send(res, 200, { log: db.prepare('SELECT * FROM activity_log ORDER BY id DESC LIMIT 200').all() }); return; }
     if (p === '/api/owner/access' && req.method === 'POST') {

@@ -136,6 +136,7 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{border-bottom:1px
     <button onclick="saveReqs()">บันทึกจำนวนคน</button>
     <p class="muted">แตะชื่อเด็กด้านล่างก่อน แล้วแตะวันที่จะให้ทำ — วันที่เด็กว่างจะมีขอบเขียว ถ้าเด็กไม่ได้ลงวันว่างไว้จะถามยืนยันก่อน แตะชื่อที่ลงไว้ในช่องวันเพื่อเอาออก</p>
     <div id="bdStaff" style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0"></div>
+    <div id="bdHours" style="margin:6px 0"></div>
     <div id="bdSummary" style="margin:10px 0"></div>
     <div id="bdGrid" style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px"></div>
   </div>
@@ -421,6 +422,8 @@ async function loadBoard(){
   renderBoard();
 }
 function reqFor(dateStr,wd){const d=bdData;return d.ov[dateStr]??d.req[wd]??0;}
+function shiftHrs(a,b){if(!a||!b)return 4;const p=s=>{const[x,y]=s.split(':').map(Number);return x*60+y;};let dd=p(b)-p(a);if(dd<=0)dd+=1440;return +(dd/60).toFixed(2);}
+function mondayOf(ds){const dt=new Date(ds+'T12:00:00');dt.setDate(dt.getDate()-((dt.getDay()+6)%7));return dt.toISOString().slice(0,10);}
 function renderBoard(){
   const d=bdData;if(!d)return;
   const counts={};d.shifts.forEach(s=>counts[s.staff_id]=(counts[s.staff_id]||0)+1);
@@ -430,6 +433,13 @@ function renderBoard(){
     return (counts[a.id]||0)-(counts[b.id]||0);
   });
   document.getElementById('bdStaff').innerHTML=order.map(s=>`<button style="padding:6px 10px;${bdSel===s.id?'background:#0d7a5f;color:#fff':''}" onclick="bdSel=${bdSel===s.id?null:s.id};renderBoard()">${s.name} (${counts[s.id]||0})</button>`).join('');
+  // Per-person scheduled hours for the month, split by Mon-Sun week — so the owner
+  // can see at a glance who is loaded up and whether hours match, daily/weekly.
+  const hrs={};
+  d.allShifts.forEach(s=>{const h=shiftHrs(s.time_start,s.time_end);const e=hrs[s.staff_id]=hrs[s.staff_id]||{shifts:0,hours:0,weeks:{}};e.shifts++;e.hours+=h;const mo=mondayOf(s.date);e.weeks[mo]=(e.weeks[mo]||0)+h;});
+  const mondays=[...new Set(d.allShifts.map(s=>mondayOf(s.date)))].sort();
+  const hrows=Object.entries(hrs).map(([id,e])=>({name:(d.staff.find(x=>x.id==id)||{}).name||id,...e})).sort((a,b)=>b.hours-a.hours);
+  document.getElementById('bdHours').innerHTML=hrows.length?'<h3 style="margin:10px 0 4px">ชั่วโมงตามตาราง — รายคน (เดือนนี้)</h3><table><tr><th>ชื่อ</th><th>กะ</th><th>ชม.รวม</th>'+mondays.map(mo=>'<th>สัปดาห์ '+mo.slice(5).replace('-','/')+'</th>').join('')+'</tr>'+hrows.map(r=>'<tr><td>'+r.name+'</td><td>'+r.shifts+'</td><td><b>'+r.hours+'</b></td>'+mondays.map(mo=>'<td>'+(r.weeks[mo]||'')+'</td>').join('')+'</tr>').join('')+'</table>':'';
   const [y,mo]=d.m.split('-').map(Number);
   const days=new Date(y,mo,0).getDate();
   const firstWd=new Date(y,mo-1,1).getDay();
@@ -470,6 +480,11 @@ async function boardTapDay(dt){
   if(d.allShifts.some(s=>s.date===dt&&s.staff_id===bdSel)){if(!confirm(st.name+' มีกะที่ร้านอื่นวันนี้แล้ว จะลงเพิ่มอีกไหม?'))return;}
   if(need===0){if(!confirm('วันนี้ตั้งไว้ว่าต้องการ 0 คน (ร้านปิด) จะลงกะให้ '+st.name+' อยู่ไหม?'))return;force=true;}
   if(!d.avail.has(bdSel+'|'+dt)){if(!confirm(st.name+' ไม่ได้ลงวันว่างวันนี้ จะลงกะให้อยู่ไหม?'))return;}
+  // Over-scheduling guard: warn when this week would pass 20 hours for this person.
+  const wkMon=mondayOf(dt);
+  const wkHrs=d.allShifts.filter(s=>s.staff_id===bdSel&&mondayOf(s.date)===wkMon).reduce((a,s)=>a+shiftHrs(s.time_start,s.time_end),0);
+  const newHrs=wd===6?5:4;
+  if(wkHrs+newHrs>20){if(!confirm(st.name+' สัปดาห์นี้มี '+wkHrs+' ชม. แล้ว (+กะนี้ '+newHrs+' ชม. = '+(wkHrs+newHrs)+' ชม.) เกิน 20 ชม. ลงต่อไหม?'))return;}
   const isBaes=(shops.find(s=>s.id===d.shopId)||{}).name==="Bae's";
   const body={staff_id:bdSel,shop_id:d.shopId,date:dt,time_start:'23:00'};
   if(!isBaes)body.time_end=wd===6?'04:00':'03:00';
@@ -486,7 +501,7 @@ async function loadSummary(){
   const ranked=[...d.per_staff].sort((a,b)=>b.hours-a.hours);
   const mx=Math.max(...ranked.map(s=>s.hours),1);
   const rankHtml='<h3 style="margin:10px 0 4px">งานมาก → น้อย (ตามชั่วโมง)</h3>'+ranked.map((s,i)=>`<div>${i+1}. ${s.name} — ${s.hours}h <span style="display:inline-block;height:10px;background:#0d7a5f;width:${Math.round(s.hours/mx*120)}px"></span></div>`).join('');
-  document.getElementById('summaryBox').innerHTML='<p>Agent total: <b>$'+d.total_agent+'</b> · Worker pay total: <b>$'+d.total_worker_pay+'</b></p><p>ค้างจ่าย: <b>$'+unpaidTotal.toFixed(2)+'</b> ('+unpaid.length+' คนยังไม่ได้จ่าย)</p>'+rankHtml+d.per_shop.map(s=>`<div><b>${s.shop}</b>: agent $${s.agent_total} · worker pay $${s.worker_pay} · taxi $${s.taxi_claimable} · reimburse $${s.taxi_reimburse}</div>`).join('')+d.per_staff.map(s=>`<div>${s.name}: ${s.hours}h · pay $${s.worker_pay} · taxi $${s.taxi} · reimburse $${s.taxi_reimburse}${s.paynow?' · PayNow: '+s.paynow:''}${s.payname?' · ชื่อบัญชี: '+s.payname:''} <button class="ghost" onclick="togglePay(${s.staff_id},'${m}',${s.paid?0:1})">${s.paid?'✅ จ่ายแล้ว':'ยังไม่จ่าย — กดเมื่อจ่ายแล้ว'}</button></div>`).join('');
+  document.getElementById('summaryBox').innerHTML='<p>Agent total: <b>$'+d.total_agent+'</b> · Worker pay total: <b>$'+d.total_worker_pay+'</b></p><p>ค้างจ่าย: <b>$'+unpaidTotal.toFixed(2)+'</b> ('+unpaid.length+' คนยังไม่ได้จ่าย)</p>'+rankHtml+d.per_shop.map(s=>`<div><b>${s.shop}</b>: agent $${s.agent_total} · worker pay $${s.worker_pay} · taxi $${s.taxi_claimable} · reimburse $${s.taxi_reimburse}</div>`).join('')+d.per_staff.map(s=>`<div>${s.name}: ทำจริง ${s.hours}h · ตามตาราง ${s.sched_hours||0}h${(s.sched_hours||0)!==s.hours?' ⚠️ ไม่ตรง':''} · pay $${s.worker_pay} · taxi $${s.taxi} · reimburse $${s.taxi_reimburse}${s.paynow?' · PayNow: '+s.paynow:''}${s.payname?' · ชื่อบัญชี: '+s.payname:''} <button class="ghost" onclick="togglePay(${s.staff_id},'${m}',${s.paid?0:1})">${s.paid?'✅ จ่ายแล้ว':'ยังไม่จ่าย — กดเมื่อจ่ายแล้ว'}</button></div>`).join('');
 }
 async function togglePay(staffId,month,paid){await api('/api/owner/pay-status',{method:'POST',token:ownerToken,body:JSON.stringify({month,staff_id:staffId,paid:!!paid})});loadSummary();}
 function dl(url){const a=document.createElement('a');a.href=url;a.download='';document.body.appendChild(a);a.click();a.remove();}
