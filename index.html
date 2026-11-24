@@ -33,7 +33,7 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{border-bottom:1px
   </div>
   <hr>
   <p class="muted" data-t="ownerHint">เจ้าของ / แอดมิน: ตั้ง PIN ครั้งแรกด้านล่าง แล้วเข้าโซนของตัวเอง</p>
-  <div class="row"><input id="pinRole" value="owner" readonly><input id="pinName" placeholder="ชื่อแอดมิน (ถ้าเข้าโซนแอดมิน)"><input id="pinCode" inputmode="numeric" placeholder="PIN (4 ตัวขึ้นไป)"></div>
+  <div class="row"><input id="pinRole" value="owner" readonly><input id="pinName" placeholder="ชื่อแอดมิน (ถ้าเข้าโซนแอดมิน)"><input id="pinCode" type="password" inputmode="numeric" placeholder="PIN (4 ตัวขึ้นไป)"></div>
   <button onclick="pinSetup()" data-t="setPin">ตั้ง PIN</button>
   <button onclick="pinVerify()" data-t="enterPin">เข้าโซน PIN</button>
   <p id="pinErr" class="bad"></p>
@@ -363,7 +363,7 @@ async function pinVerify(){
 async function loadOwner(){
   const d=await api('/api/owner/staff',{token:ownerToken});
   const ad=await api('/api/owner/admins',{token:ownerToken});
-  document.getElementById('adminDir').innerHTML=ad.admins.map(a=>`<div>${a.name} · ${a.active?'active':'deactivated'} · <input data-adminpin="${a.id}" placeholder="PIN ใหม่" style="width:110px"> <button onclick="changeAdminPin(${a.id})">Change PIN</button> <button class="ghost" onclick="toggleAdmin(${a.id},${a.active?0:1})">${a.active?'Deactivate':'Activate'}</button></div>`).join('')||'No admins yet (max 3).';
+  document.getElementById('adminDir').innerHTML=ad.admins.map(a=>`<div>${a.name} · ${a.active?'active':'deactivated'} · <input data-adminpin="${a.id}" type="password" placeholder="PIN ใหม่" style="width:110px"> <button onclick="changeAdminPin(${a.id})">Change PIN</button> <button class="ghost" onclick="toggleAdmin(${a.id},${a.active?0:1})">${a.active?'Deactivate':'Activate'}</button></div>`).join('')||'No admins yet (max 3).';
   const rm={};(d.rates||[]).forEach(r=>{(rm[r.staff_id]=rm[r.staff_id]||{})[r.shop_id]=r.worker_rate;});
   document.getElementById('staffDir').innerHTML=d.staff.map(s=>{const esc=v=>(v||'').replace(/"/g,'&quot;');return `<div style="border-bottom:1px solid var(--hatch-widget-border);padding:8px 0"><b>${s.name}</b> ${s.direct_company?'(direct to company)':''}<br>เบอร์: <input data-phone="${s.id}" value="${esc(s.phone)}" placeholder="เบอร์มือถือ" style="width:130px"> PayNow/บัญชี: <input data-paynow="${s.id}" value="${esc(s.paynow)}" placeholder="PayNow หรือเลขบัญชี" style="width:170px"> ชื่อบัญชี: <input data-payname="${s.id}" value="${esc(s.payname)}" placeholder="ชื่อเจ้าของบัญชี" style="width:150px"><br>เรทแยกตามร้าน:<br>${d.shops.filter(sh=>sh.active).map(sh=>`${sh.name} $<input data-shoprate="${s.id}:${sh.id}" type="number" value="${(rm[s.id]||{})[sh.id]??''}" placeholder="ว่าง = ใช้เรท ${sh.name}" style="width:80px">`).join(' ')} /ชม.<br>ประวัติ: <input data-notes="${s.id}" value="${esc(s.notes)}" placeholder="ประวัติ เช่น เริ่มงานเมื่อไหร่ หมายเหตุ" style="width:100%"><br><button onclick="savePhone(${s.id})">บันทึก</button> <button class="ghost" onclick="toggleStaff(${s.id},${s.active?0:1})">${s.active?'Deactivate (block)':'Activate'}</button> <button class="danger" onclick="deleteStaff(${s.id},'${s.name}')">ลบ</button></div>`;}).join('');
   document.getElementById('billStaff').innerHTML=d.staff.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
