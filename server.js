@@ -110,6 +110,8 @@ try {
     db.prepare("DELETE FROM pins WHERE role='admin'").run();
   }
 } catch (e) {}
+// Clock times are stored as UTC ISO strings; display them in Singapore time (UTC+8).
+function sgtHHMM(iso) { if (!iso) return ''; const d = new Date(new Date(iso).getTime() + 8 * 3600e3); return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0'); }
 function normPhone(p) { const d = String(p || '').replace(/\D/g, ''); return d.length > 8 ? d.slice(-8) : d; }
 function staffAuth(req) {
   const h = req.headers.authorization || '';
@@ -616,6 +618,7 @@ async function handle(req, res) {
     }
     if (p === '/api/today-status') {
       if (!auth(req) && !staffAuth(req)) return send(res, 401, { error: 'login required' });
+      const isOwner = auth(req) === 'owner';
       const today = new Date().toISOString().slice(0, 10);
       const out = [];
       for (const shop of SHOPS().filter(s => s.active)) {
@@ -624,9 +627,11 @@ async function handle(req, res) {
         const recByStaff = {};
         for (const r of recs) recByStaff[r.staff_id] = r;
         const schedIds = new Set(shifts.map(s => s.staff_id));
-        const extra = recs.filter(r => !schedIds.has(r.staff_id)).map(r => ({ staff: staffName(r.staff_id), time_start: (r.clock_in || '').slice(11, 16), time_end: (r.clock_out || '').slice(11, 16), clocked_in: !!r.clock_in, clocked_out: !!r.clock_out, covers_for: r.covers_for_id ? staffName(r.covers_for_id) : null, unscheduled: true }));
+        // Taxi amounts are money: owner only, never for admin or staff.
+        const taxiOf = r => isOwner ? { taxi_amount: r ? (r.taxi_amount || 0) : 0, taxi_payer: r ? (r.taxi_payer || '') : '' } : {};
+        const extra = recs.filter(r => !schedIds.has(r.staff_id)).map(r => ({ staff: staffName(r.staff_id), time_start: sgtHHMM(r.clock_in), time_end: sgtHHMM(r.clock_out), clock_in_time: sgtHHMM(r.clock_in), clock_out_time: sgtHHMM(r.clock_out), clocked_in: !!r.clock_in, clocked_out: !!r.clock_out, covers_for: r.covers_for_id ? staffName(r.covers_for_id) : null, unscheduled: true, ...taxiOf(r) }));
         out.push({ shop_id: shop.id, shop: shop.name,
-          scheduled: shifts.map(s => { const r = recByStaff[s.staff_id]; return { staff: staffName(s.staff_id), time_start: s.time_start || '', time_end: s.time_end || '', clocked_in: !!(r && r.clock_in), clocked_out: !!(r && r.clock_out), covers_for: s.covers_for_id ? staffName(s.covers_for_id) : null }; }),
+          scheduled: shifts.map(s => { const r = recByStaff[s.staff_id]; return { staff: staffName(s.staff_id), time_start: s.time_start || '', time_end: s.time_end || '', clock_in_time: r && r.clock_in ? sgtHHMM(r.clock_in) : '', clock_out_time: r && r.clock_out ? sgtHHMM(r.clock_out) : '', clocked_in: !!(r && r.clock_in), clocked_out: !!(r && r.clock_out), covers_for: s.covers_for_id ? staffName(s.covers_for_id) : null, ...taxiOf(r) }; }),
           extra,
           clocked_in_count: recs.filter(r => r.clock_in).length, clocked_out_count: recs.filter(r => r.clock_out).length, scheduled_count: shifts.length });
       }
@@ -981,7 +986,7 @@ async function handle(req, res) {
       const recs = db.prepare('SELECT * FROM clock_records WHERE staff_id=? AND date BETWEEN ? AND ? AND clock_out IS NOT NULL ORDER BY shop_id, date').all(sid, from, to);
       const rows = [['Date', 'Timing', 'Hr', '1.5', 'Total']];
       let total = 0;
-      for (const r of recs) { const pay = calcPay(r); total += pay.agentAmount; rows.push([r.date, (r.clock_in || '').slice(11, 16) + '-' + (r.clock_out || '').slice(11, 16), pay.normalHrs, pay.hrs15, pay.agentAmount.toFixed(2)]); }
+      for (const r of recs) { const pay = calcPay(r); total += pay.agentAmount; rows.push([r.date, sgtHHMM(r.clock_in) + '-' + sgtHHMM(r.clock_out), pay.normalHrs, pay.hrs15, pay.agentAmount.toFixed(2)]); }
       rows.push(['', '', '', 'TOTAL', total.toFixed(2)]);
       res.writeHead(200, { 'Content-Type': 'text/csv', 'Content-Disposition': `attachment; filename="direct-bill-${staffName(sid)}-${month}.csv"` }); res.end(csv(rows)); return;
     }
@@ -994,7 +999,7 @@ async function handle(req, res) {
       const recs = db.prepare('SELECT * FROM clock_records WHERE shop_id=? AND date BETWEEN ? AND ? AND clock_out IS NOT NULL ORDER BY date').all(shopId, from, to);
       const rows = [[`Company: ${shop ? shop.company_name : ''}`], [`Month: ${month}`], ['Date', 'Time', 'Talent', 'Rate', 'Hr', 'BA', 'Remark', 'Amount', 'Transport', 'Claims', 'Talent Riding']];
       let amt = 0, tr = 0, trc = 0;
-      for (const r of recs) { const pay = calcPay(r); amt += pay.agentAmount; tr += r.taxi_amount || 0; trc += cappedTaxi(r); rows.push([r.date, (r.clock_in || '').slice(11, 16) + '-' + (r.clock_out || '').slice(11, 16), staffName(r.staff_id), pay.agentRate, r.hours, 1, r.covers_for_id ? 'covers ' + staffName(r.covers_for_id) : '', pay.agentAmount.toFixed(2), (r.taxi_amount || 0).toFixed(2), cappedTaxi(r).toFixed(2), JSON.parse(r.riders || '[]').map(staffName).join(',')]); }
+      for (const r of recs) { const pay = calcPay(r); amt += pay.agentAmount; tr += r.taxi_amount || 0; trc += cappedTaxi(r); rows.push([r.date, sgtHHMM(r.clock_in) + '-' + sgtHHMM(r.clock_out), staffName(r.staff_id), pay.agentRate, r.hours, 1, r.covers_for_id ? 'covers ' + staffName(r.covers_for_id) : '', pay.agentAmount.toFixed(2), (r.taxi_amount || 0).toFixed(2), cappedTaxi(r).toFixed(2), JSON.parse(r.riders || '[]').map(staffName).join(',')]); }
       rows.push(['', '', '', '', '', '', 'TOTAL', amt.toFixed(2), tr.toFixed(2), trc.toFixed(2), '']);
       res.writeHead(200, { 'Content-Type': 'text/csv', 'Content-Disposition': `attachment; filename="bng-bill-${shop ? shop.name : shopId}-${month}.csv"` }); res.end(csv(rows)); return;
     }
