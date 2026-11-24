@@ -60,6 +60,8 @@ try { db.exec("ALTER TABLE staff ADD COLUMN phone TEXT DEFAULT ''"); } catch (e)
 try { db.exec("ALTER TABLE staff ADD COLUMN paynow TEXT DEFAULT ''"); } catch (e) {}
 try { db.exec("ALTER TABLE staff ADD COLUMN payname TEXT DEFAULT ''"); } catch (e) {}
 try { db.exec("ALTER TABLE staff ADD COLUMN notes TEXT DEFAULT ''"); } catch (e) {}
+try { db.exec("ALTER TABLE staff ADD COLUMN login_code_hash TEXT DEFAULT ''"); } catch (e) {}
+try { db.exec("ALTER TABLE staff ADD COLUMN login_code_salt TEXT DEFAULT ''"); } catch (e) {}
 try { db.exec("ALTER TABLE sessions ADD COLUMN staff_id INTEGER"); } catch (e) {}
 try { db.exec("ALTER TABLE sessions ADD COLUMN admin_id INTEGER"); } catch (e) {}
 try { db.exec("ALTER TABLE otp_codes ADD COLUMN code TEXT DEFAULT ''"); } catch (e) {}
@@ -123,6 +125,16 @@ function requireStaff(req, res) {
   const st = staffAuth(req);
   if (!st) { send(res, 401, { error: 'staff login required — enter your registered name and mobile number' }); return null; }
   return st;
+}
+// Issue a staff session exactly like a successful login: a session token plus a
+// trusted-device token remembered for 30 days. Shared by OTP verify and personal-code login.
+function issueStaffSession(st) {
+  const token = crypto.randomBytes(24).toString('hex');
+  db.prepare('INSERT INTO sessions(token,role,staff_id,created_at) VALUES(?,?,?,?)').run(token, 'staff', st.id, new Date().toISOString());
+  const deviceToken = crypto.randomBytes(24).toString('hex');
+  const devExp = new Date(Date.now() + 30 * 86400e3).toISOString();
+  db.prepare('INSERT INTO trusted_devices(device_token,staff_id,expires_at,created_at,last_seen) VALUES (?,?,?,?,?)').run(deviceToken, st.id, devExp, new Date().toISOString(), new Date().toISOString());
+  return { token, device_token: deviceToken };
 }
 
 const STAFF_NAMES = () => db.prepare('SELECT id,name,active,direct_company FROM staff ORDER BY name').all();
@@ -210,6 +222,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 INSERT OR IGNORE INTO settings(key,value) VALUES('public_access','1');
 CREATE TABLE IF NOT EXISTS otp_codes(id INTEGER PRIMARY KEY AUTOINCREMENT, staff_id INTEGER, code_hash TEXT, code TEXT, expires_at TEXT, attempts INTEGER DEFAULT 0, used INTEGER DEFAULT 0, created_at TEXT);
 CREATE TABLE IF NOT EXISTS trusted_devices(device_token TEXT PRIMARY KEY, staff_id INTEGER, expires_at TEXT, created_at TEXT, last_seen TEXT);
+CREATE TABLE IF NOT EXISTS code_login_attempts(id INTEGER PRIMARY KEY AUTOINCREMENT, staff_id INTEGER, created_at TEXT);
 CREATE TABLE IF NOT EXISTS admins(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, salt TEXT, hash TEXT, active INTEGER DEFAULT 1, created_at TEXT);
 CREATE TABLE IF NOT EXISTS shop_rules(shop_id INTEGER PRIMARY KEY, open_weekdays TEXT, close_weekday TEXT, close_sat_phe TEXT, location TEXT, taxi_cap_per_head REAL);
 CREATE TABLE IF NOT EXISTS ph_eves(date TEXT PRIMARY KEY, label TEXT);`);
@@ -278,13 +291,39 @@ async function handle(req, res) {
         return send(res, 403, { error: 'wrong OTP code' });
       }
       db.prepare('UPDATE otp_codes SET used=1 WHERE id=?').run(row.id);
-      const token = crypto.randomBytes(24).toString('hex');
-      db.prepare('INSERT INTO sessions(token,role,staff_id,created_at) VALUES(?,?,?,?)').run(token, 'staff', st.id, new Date().toISOString());
-      const deviceToken = crypto.randomBytes(24).toString('hex');
-      const devExp = new Date(Date.now() + 30 * 86400e3).toISOString();
-      db.prepare('INSERT INTO trusted_devices(device_token,staff_id,expires_at,created_at,last_seen) VALUES (?,?,?,?,?)').run(deviceToken, st.id, devExp, new Date().toISOString(), new Date().toISOString());
+      const sess = issueStaffSession(st);
       log(st.name, 'otp_verified', 'OTP verified, device remembered for 30 days');
-      send(res, 200, { ok: true, token, device_token: deviceToken, staff_id: st.id, name: st.name }); return;
+      send(res, 200, { ok: true, token: sess.token, device_token: sess.device_token, staff_id: st.id, name: st.name }); return;
+    }
+    if (p === '/api/staff-login-code' && req.method === 'POST') {
+      // Personal-code login: name + registered phone + the staff member's own
+      // 4-digit code (initially the last 4 digits of their phone number; the
+      // owner can change it). Same session + 30-day remembered device as OTP.
+      // NOTE: /api/staff-login is already OTP step 1, so this is a separate path.
+      if (!publicAccessOn()) return send(res, 403, { error: 'access_disabled' });
+      const b = await bodyJson(req);
+      const name = String(b.name || '').trim().toLowerCase();
+      const phone = normPhone(b.phone);
+      const code = String(b.code || '').trim();
+      if (!name || !phone || !code) return send(res, 400, { error: 'กรุณากรอกชื่อ เบอร์มือถือ และรหัสส่วนตัว' });
+      const st = db.prepare('SELECT * FROM staff WHERE lower(name)=?').get(name);
+      if (!st || !st.active || !st.phone || normPhone(st.phone) !== phone) {
+        log(name || 'unknown', 'login_failed', 'name/phone did not match registered staff');
+        return send(res, 403, { error: 'name or mobile number not registered — ask the owner to add your number' });
+      }
+      if (!st.login_code_hash || !st.login_code_salt) return send(res, 400, { error: 'ยังไม่มีรหัสส่วนตัว — ขอให้เจ้าของตั้งรหัสให้ หรือกด "ขอ OTP แทน"' });
+      const hourAgo = new Date(Date.now() - 3600e3).toISOString();
+      const fails = db.prepare('SELECT COUNT(*) c FROM code_login_attempts WHERE staff_id=? AND created_at>?').get(st.id, hourAgo).c;
+      if (fails >= 5) return send(res, 429, { error: 'ใส่รหัสผิดหลายครั้งเกินไป — รอ 1 ชั่วโมง หรือขอ OTP แทน' });
+      if (hashPin(code, st.login_code_salt) !== st.login_code_hash) {
+        db.prepare('INSERT INTO code_login_attempts(staff_id,created_at) VALUES (?,?)').run(st.id, new Date().toISOString());
+        log(st.name, 'code_login_failed', 'wrong personal code attempt');
+        return send(res, 401, { error: 'รหัสส่วนตัวไม่ถูกต้อง' });
+      }
+      db.prepare('DELETE FROM code_login_attempts WHERE staff_id=?').run(st.id);
+      const sess = issueStaffSession(st);
+      log(st.name, 'code_login', 'personal code login, device remembered for 30 days');
+      send(res, 200, { ok: true, token: sess.token, device_token: sess.device_token, staff_id: st.id, name: st.name }); return;
     }
     if (p === '/api/staff-device-login' && req.method === 'POST') {
       // Remembered device: skip OTP if the device token is still valid and
@@ -788,7 +827,15 @@ async function handle(req, res) {
       if (b.active !== undefined) db.prepare('UPDATE staff SET active=? WHERE id=?').run(b.active ? 1 : 0, id);
       if (b.direct_company !== undefined) db.prepare('UPDATE staff SET direct_company=? WHERE id=?').run(b.direct_company ? 1 : 0, id);
       if (b.worker_rate_override !== undefined) db.prepare('UPDATE staff SET worker_rate_override=? WHERE id=?').run(b.worker_rate_override, id);
-      log('owner', 'staff_update', 'staff ' + id + ' ' + JSON.stringify(b));
+      if (b.login_code !== undefined) {
+        const code = String(b.login_code).trim();
+        if (!/^\d{4,8}$/.test(code)) return send(res, 400, { error: 'login code must be 4–8 digits' });
+        const salt = crypto.randomBytes(8).toString('hex');
+        db.prepare('UPDATE staff SET login_code_hash=?, login_code_salt=? WHERE id=?').run(hashPin(code, salt), salt, id);
+      }
+      // Never log the code itself — only that it was changed.
+      const { login_code: _lc, ...safeBody } = b;
+      log('owner', 'staff_update', 'staff ' + id + ' ' + JSON.stringify(safeBody) + (b.login_code !== undefined ? ' login_code_changed' : ''));
       send(res, 200, { ok: true }); return;
     }
     if (p.startsWith('/api/staff/') && req.method === 'DELETE') {
@@ -827,7 +874,7 @@ async function handle(req, res) {
       log('owner', 'admin_update', 'admin ' + a.name + ' updated ' + JSON.stringify({ name: b.name, pin_changed: !!b.pin, active: b.active }));
       send(res, 200, { ok: true }); return;
     }
-    if (p === '/api/owner/staff') { const role = requireRole(req, res, ['owner']); if (!role) return; send(res, 200, { staff: db.prepare('SELECT id,name,active,direct_company,phone,paynow,payname,notes,worker_rate_override FROM staff ORDER BY name').all(), shops: SHOPS(), rates: db.prepare('SELECT staff_id, shop_id, worker_rate FROM staff_shop_rates').all() }); return; }
+    if (p === '/api/owner/staff') { const role = requireRole(req, res, ['owner']); if (!role) return; const staff = db.prepare("SELECT id,name,active,direct_company,phone,paynow,payname,notes,worker_rate_override, (CASE WHEN login_code_hash IS NOT NULL AND login_code_hash != '' THEN 1 ELSE 0 END) AS has_login_code FROM staff ORDER BY name").all().map(s => ({ ...s, has_login_code: !!s.has_login_code })); send(res, 200, { staff, shops: SHOPS(), rates: db.prepare('SELECT staff_id, shop_id, worker_rate FROM staff_shop_rates').all() }); return; }
     if (p === '/api/owner/staff-shop-rates' && req.method === 'POST') {
       const role = requireRole(req, res, ['owner']); if (!role) return;
       const b = await bodyJson(req);
