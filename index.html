@@ -289,14 +289,14 @@ async function refreshMe(){
   const sl=await api('/api/staff-list',{token:staffToken}).catch(()=>null);
   window._staffList=sl?sl.staff:[];
   if(sl){const others=sl.staff.filter(s=>s.id!==me.staff_id);
-    const pill=s=>`<button type="button" onclick="togglePill(this,${s.id},'group')" style="margin:2px;padding:8px 12px;border-radius:20px;border:1px solid var(--hatch-widget-border);background:var(--hatch-widget-surface)"> ${s.name}</button>`;
-    const rpill=s=>`<button type="button" data-id="${s.id}" onclick="togglePill(this,${s.id},'rider')" style="margin:2px;padding:8px 12px;border-radius:20px;border:1px solid var(--hatch-widget-border);background:var(--hatch-widget-surface)"> ${s.name}</button>`;
+    const pill=s=>`<button type="button" onclick="togglePill(this,${s.id},'group')" style="margin:2px;padding:8px 12px;border-radius:20px;border:1px solid #ccc;background:#fff;color:#222"> ${s.name}</button>`;
+    const rpill=s=>`<button type="button" data-id="${s.id}" onclick="togglePill(this,${s.id},'rider')" style="margin:2px;padding:8px 12px;border-radius:20px;border:1px solid #ccc;background:#fff;color:#222"> ${s.name}</button>`;
     document.getElementById('groupPills').innerHTML=others.map(pill).join('')||'ไม่มีเพื่อนให้เลือก';
     document.getElementById('riderPills').innerHTML=others.map(rpill).join('')||'—';}
   // Taxi payer: show every name as a tappable button (like the rider pills) — me first, already selected.
   taxiPayerSel = (lc&&lc.taxi_payer)?lc.taxi_payer:me.name;
   const esc = s => s.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
-  const ppill = (label, val, on) => `<button type="button" data-v="${esc(val)}" onclick="pickPayer(this)" style="margin:2px;padding:8px 12px;border-radius:20px;border:1px solid var(--hatch-widget-border);background:${on?'#0d7a5f':'var(--hatch-widget-surface)'};color:${on?'#fff':'inherit'}"> ${label}</button>`;
+  const ppill = (label, val, on) => `<button type="button" data-v="${esc(val)}" onclick="pickPayer(this)" style="margin:2px;padding:8px 12px;border-radius:20px;border:1px solid #ccc;background:${on?'#0d7a5f':'#fff'};color:${on?'#fff':'#222'}"> ${label}</button>`;
   const others2 = sl ? sl.staff.filter(s=>s.id!==me.staff_id) : [];
   document.getElementById('taxiPayerPills').innerHTML = ppill(me.name+' (ฉันจ่ายเอง)', me.name, taxiPayerSel===me.name) + others2.map(s=>ppill(s.name, s.name, taxiPayerSel===s.name)).join('') + ppill('เจ้าของจ่าย','owner',taxiPayerSel==='owner') + ppill('ร้านจ่าย','shop',taxiPayerSel==='shop');
   // Prefill the taxi form from tonight's closed record (if any), so the
@@ -312,7 +312,7 @@ async function refreshMe(){
   }
   updateTaxiHint();
 }
-function togglePill(el,id,set){const s=set==='group'?groupSel:riderSel;if(s.has(id)){s.delete(id);el.style.background='';el.style.color='';}else{if(set==='group'&&s.size>=4){alert('เลือกเพื่อนได้สูงสุด 4 คน (รวมเธอเป็น 5 คน)');return;}s.add(id);el.style.background='#0d7a5f';el.style.color='#fff';}if(set==='rider')updateTaxiHint();}
+function togglePill(el,id,set){const s=set==='group'?groupSel:riderSel;if(s.has(id)){s.delete(id);el.style.background='#fff';el.style.color='#222';}else{if(set==='group'&&s.size>=4){alert('เลือกเพื่อนได้สูงสุด 4 คน (รวมเธอเป็น 5 คน)');return;}s.add(id);el.style.background='#0d7a5f';el.style.color='#fff';}if(set==='rider')updateTaxiHint();}
 function updateTaxiHint(){
   const amt=Number(document.getElementById('taxiAmt').value||0);
   const heads=1+riderSel.size;
@@ -323,7 +323,7 @@ function updateTaxiHint(){
   document.getElementById('taxiWarn').textContent=t;
 }
 function hideTaxiStep(){window._taxiSkipped=window._taxiRecordId;document.getElementById('taxiStep').style.display='none';}
-function pickPayer(el){taxiPayerSel=el.dataset.v;document.querySelectorAll('#taxiPayerPills button').forEach(b=>{b.style.background='var(--hatch-widget-surface)';b.style.color='';});el.style.background='#0d7a5f';el.style.color='#fff';}
+function pickPayer(el){taxiPayerSel=el.dataset.v;document.querySelectorAll('#taxiPayerPills button').forEach(b=>{b.style.background='#fff';b.style.color='#222';});el.style.background='#0d7a5f';el.style.color='#fff';}
 async function clockIn(){
   const photo=await fileData('photoIn');
   const ids=[me.staff_id];if(isGroupMode){groupSel.forEach(id=>ids.push(id));}
@@ -458,7 +458,7 @@ async function loadCoverRequests(){
   try{
     const d=await api('/api/cover-requests',{token:ownerToken||adminToken});
     if(!d.requests.length){box.innerHTML='ไม่มีคำขอค้างอยู่';return;}
-    box.innerHTML=d.requests.map(rq=>`<div style="border:1px solid var(--hatch-widget-border);border-radius:8px;padding:10px;margin:8px 0"><b>${rq.name}</b> ลา ${rq.date} · ${rq.shop}${rq.reason?' — '+rq.reason:''}<br><span class="muted">คนที่เหมาะ (เรียงจากว่าง + เคยทำร้านนี้มาก่อน):</span><br>`+
+    box.innerHTML=d.requests.map(rq=>`<div style="border:1px solid #eee;border-radius:8px;padding:10px;margin:8px 0"><b>${rq.name}</b> ลา ${rq.date} · ${rq.shop}${rq.reason?' — '+rq.reason:''}<br><span class="muted">คนที่เหมาะ (เรียงจากว่าง + เคยทำร้านนี้มาก่อน):</span><br>`+
       rq.candidates.slice(0,6).map(c=>`<button class="ghost" style="margin:2px" onclick="assignCover(${rq.id},${c.id},'${c.name}')">${c.name}${c.available?' ✅ว่าง':''} · ${rq.shop} ${c.shop_shifts} กะ${c.already_working?' · ทำงานที่อื่นวันนั้นแล้ว':''}${c.scheduled_here?' · มีกะที่ร้านนี้แล้ว':''}</button>`).join('')+
       `<br><button class="ghost" onclick="cancelCoverReq(${rq.id})">ปิดคำขอนี้</button></div>`).join('');
   }catch(e){box.innerHTML='โหลดคำขอไม่ได้: '+e.message;}
@@ -469,7 +469,7 @@ async function loadOwnerLeaves(){
   try{
     const d=await api('/api/owner/leaves',{token:ownerToken});
     if(!d.leaves.length){box.innerHTML='ไม่มีวันลา';return;}
-    box.innerHTML=d.leaves.map(l=>`<div style="border:1px solid var(--hatch-widget-border);border-radius:8px;padding:10px;margin:8px 0"><b>${l.name}</b> · ${l.date} · ${l.type}${l.reason?' — '+l.reason:''} ${l.scheduled?'<span class="bad"><b>⚠️ ต้องหาคนแทน — มีกะวันนั้น</b></span>':''} <button class="ghost" onclick="delOwnerLeave(${l.id})">ลบ</button></div>`).join('');
+    box.innerHTML=d.leaves.map(l=>`<div style="border:1px solid #eee;border-radius:8px;padding:10px;margin:8px 0"><b>${l.name}</b> · ${l.date} · ${l.type}${l.reason?' — '+l.reason:''} ${l.scheduled?'<span class="bad"><b>⚠️ ต้องหาคนแทน — มีกะวันนั้น</b></span>':''} <button class="ghost" onclick="delOwnerLeave(${l.id})">ลบ</button></div>`).join('');
   }catch(e){box.innerHTML='โหลดวันลาไม่ได้: '+e.message;}
 }
 async function delOwnerLeave(id){if(!confirm('ลบวันลานี้?'))return;await api('/api/owner/leaves/'+id,{method:'DELETE',token:ownerToken});loadOwnerLeaves();}
@@ -492,10 +492,10 @@ async function loadOwner(){
   const ad=await api('/api/owner/admins',{token:ownerToken});
   document.getElementById('adminDir').innerHTML=ad.admins.map(a=>`<div>${a.name} · ${a.active?'active':'deactivated'} · <input data-adminpin="${a.id}" type="password" placeholder="PIN ใหม่" style="width:110px"> <button onclick="changeAdminPin(${a.id})">Change PIN</button> <button class="ghost" onclick="toggleAdmin(${a.id},${a.active?0:1})">${a.active?'Deactivate':'Activate'}</button></div>`).join('')||'No admins yet (max 3).';
   const rm={};(d.rates||[]).forEach(r=>{(rm[r.staff_id]=rm[r.staff_id]||{})[r.shop_id]=r.worker_rate;});
-  document.getElementById('staffDir').innerHTML=d.staff.map(s=>{const esc=v=>(v||'').replace(/"/g,'&quot;');return `<div style="border-bottom:1px solid var(--hatch-widget-border);padding:8px 0"><b>${s.name}</b> ${s.direct_company?'(direct to company)':''}<br>เบอร์: <input data-phone="${s.id}" value="${esc(s.phone)}" placeholder="เบอร์มือถือ" style="width:130px"> PayNow/บัญชี: <input data-paynow="${s.id}" value="${esc(s.paynow)}" placeholder="PayNow หรือเลขบัญชี" style="width:170px"> ชื่อบัญชี: <input data-payname="${s.id}" value="${esc(s.payname)}" placeholder="ชื่อเจ้าของบัญชี" style="width:150px"><br>เรทแยกตามร้าน:<br>${d.shops.filter(sh=>sh.active).map(sh=>`${sh.name} $<input data-shoprate="${s.id}:${sh.id}" type="number" value="${(rm[s.id]||{})[sh.id]??''}" placeholder="ว่าง = ใช้เรท ${sh.name}" style="width:80px">`).join(' ')} /ชม.<br>ประวัติ: <input data-notes="${s.id}" value="${esc(s.notes)}" placeholder="ประวัติ เช่น เริ่มงานเมื่อไหร่ หมายเหตุ" style="width:100%"><br>รหัสส่วนตัว: ${s.has_login_code?'<b>ตั้งรหัสแล้ว ✓</b>':'<span class="bad">ยังไม่มีรหัส</span>'} <input data-logincode="${s.id}" type="password" inputmode="numeric" maxlength="8" placeholder="รหัสใหม่ 4–8 ตัว" style="width:130px"> <button onclick="saveLoginCode(${s.id})">ตั้งรหัส</button><br><button onclick="savePhone(${s.id})">บันทึก</button> <button class="ghost" onclick="toggleStaff(${s.id},${s.active?0:1})">${s.active?'Deactivate (block)':'Activate'}</button> <button class="danger" onclick="deleteStaff(${s.id},'${s.name}')">ลบ</button></div>`;}).join('');
+  document.getElementById('staffDir').innerHTML=d.staff.map(s=>{const esc=v=>(v||'').replace(/"/g,'&quot;');return `<div style="border-bottom:1px solid #eee;padding:8px 0"><b>${s.name}</b> ${s.direct_company?'(direct to company)':''}<br>เบอร์: <input data-phone="${s.id}" value="${esc(s.phone)}" placeholder="เบอร์มือถือ" style="width:130px"> PayNow/บัญชี: <input data-paynow="${s.id}" value="${esc(s.paynow)}" placeholder="PayNow หรือเลขบัญชี" style="width:170px"> ชื่อบัญชี: <input data-payname="${s.id}" value="${esc(s.payname)}" placeholder="ชื่อเจ้าของบัญชี" style="width:150px"><br>เรทแยกตามร้าน:<br>${d.shops.filter(sh=>sh.active).map(sh=>`${sh.name} $<input data-shoprate="${s.id}:${sh.id}" type="number" value="${(rm[s.id]||{})[sh.id]??''}" placeholder="ว่าง = ใช้เรท ${sh.name}" style="width:80px">`).join(' ')} /ชม.<br>ประวัติ: <input data-notes="${s.id}" value="${esc(s.notes)}" placeholder="ประวัติ เช่น เริ่มงานเมื่อไหร่ หมายเหตุ" style="width:100%"><br>รหัสส่วนตัว: ${s.has_login_code?'<b>ตั้งรหัสแล้ว ✓</b>':'<span class="bad">ยังไม่มีรหัส</span>'} <input data-logincode="${s.id}" type="password" inputmode="numeric" maxlength="8" placeholder="รหัสใหม่ 4–8 ตัว" style="width:130px"> <button onclick="saveLoginCode(${s.id})">ตั้งรหัส</button><br><button onclick="savePhone(${s.id})">บันทึก</button> <button class="ghost" onclick="toggleStaff(${s.id},${s.active?0:1})">${s.active?'Deactivate (block)':'Activate'}</button> <button class="danger" onclick="deleteStaff(${s.id},'${s.name}')">ลบ</button></div>`;}).join('');
   document.getElementById('billStaff').innerHTML=d.staff.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
   document.getElementById('editStaff').innerHTML=document.getElementById('billStaff').innerHTML;document.getElementById('editMonth').value=new Date().toISOString().slice(0,7);
-  document.getElementById('shopDir').innerHTML=d.shops.map(s=>{const esc=v=>(v||'').replace(/"/g,'&quot;');return `<div style="border-bottom:1px solid var(--hatch-widget-border);padding:8px 0"><input data-shopname="${s.id}" value="${esc(s.name)}" style="width:150px"> เอเจนต์ $<input data-shopagent="${s.id}" type="number" value="${s.agent_rate}" style="width:70px"> เด็ก $<input data-shopworker="${s.id}" type="number" value="${s.worker_rate}" style="width:70px"> <button onclick="saveShop(${s.id})">บันทึก</button> <button class="ghost" onclick="toggleShop(${s.id},${s.active?0:1})">${s.active?'เปิดอยู่':'ปิดอยู่ — กดเปิด'}</button></div>`;}).join('');
+  document.getElementById('shopDir').innerHTML=d.shops.map(s=>{const esc=v=>(v||'').replace(/"/g,'&quot;');return `<div style="border-bottom:1px solid #eee;padding:8px 0"><input data-shopname="${s.id}" value="${esc(s.name)}" style="width:150px"> เอเจนต์ $<input data-shopagent="${s.id}" type="number" value="${s.agent_rate}" style="width:70px"> เด็ก $<input data-shopworker="${s.id}" type="number" value="${s.worker_rate}" style="width:70px"> <button onclick="saveShop(${s.id})">บันทึก</button> <button class="ghost" onclick="toggleShop(${s.id},${s.active?0:1})">${s.active?'เปิดอยู่':'ปิดอยู่ — กดเปิด'}</button></div>`;}).join('');
   const fill=(id)=>{document.getElementById(id).innerHTML=d.staff.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')};['schStaff','bfStaff','schCover'].forEach(fill);
   loadCoverRequests();
   loadOwnerLeaves();
