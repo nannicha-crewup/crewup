@@ -68,6 +68,7 @@ try { db.exec("ALTER TABLE otp_codes ADD COLUMN code TEXT DEFAULT ''"); } catch 
 try { db.exec("ALTER TABLE clock_records ADD COLUMN transport_mode TEXT DEFAULT 'taxi'"); } catch (e) {}
 try { db.exec("ALTER TABLE clock_records ADD COLUMN company_transport_at TEXT DEFAULT ''"); } catch (e) {}
 try { db.exec("ALTER TABLE clock_records ADD COLUMN taxi_warning TEXT DEFAULT ''"); } catch (e) {}
+try { db.exec("ALTER TABLE clock_records ADD COLUMN edit_note TEXT DEFAULT ''"); } catch (e) {}
 // Bae's shop rules: open Tue-Sat, 11pm-3am Tue-Fri, 11pm-4am Sat & public-holiday eve, Tanjong Pagar.
 // Taxi home reimbursed max $20/head with receipt; otherwise company transport 0.5-1h after close.
 try {
@@ -754,6 +755,30 @@ async function handle(req, res) {
       log(role, 'backfill', st.name + ' ' + shopName(b.shop_id) + ' ' + b.date + ' ' + hrs + 'h');
       send(res, 200, { ok: true, id: Number(r.lastInsertRowid), hours: hrs }); return;
     }
+    if (p === '/api/clock-record/edit' && req.method === 'POST') {
+      // Owner only: correct a clock record's times (late for a good reason, forgot
+      // to clock in on arrival, etc.). Updates the SAME record — never inserts a
+      // second one, so hours can't double-count. Reason is required and logged.
+      const role = requireRole(req, res, ['owner']); if (!role) return;
+      const b = await bodyJson(req);
+      const reason = String(b.reason || '').trim();
+      if (!reason) return send(res, 400, { error: 'ใส่เหตุผลที่แก้ไขด้วย' });
+      const r0 = db.prepare('SELECT * FROM clock_records WHERE id=?').get(b.record_id);
+      if (!r0) return send(res, 400, { error: 'record not found' });
+      const hhmm = t => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(t || ''));
+      // Times are Singapore HH:MM on the record's date; out rolls to next day when needed.
+      const toISO = t => new Date(r0.date + 'T' + t + ':00+08:00');
+      const fmt = iso => { if (!iso) return '-'; const d = new Date(new Date(iso).getTime() + 8 * 3600e3); return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0'); };
+      let inISO = r0.clock_in, outISO = r0.clock_out;
+      if (b.clock_in !== undefined && b.clock_in !== null && b.clock_in !== '') { if (!hhmm(b.clock_in)) return send(res, 400, { error: 'เวลาเข้าไม่ถูก (HH:MM)' }); inISO = toISO(b.clock_in).toISOString(); }
+      if (b.clock_out !== undefined && b.clock_out !== null && b.clock_out !== '') { if (!hhmm(b.clock_out)) return send(res, 400, { error: 'เวลาออกไม่ถูก (HH:MM)' }); outISO = toISO(b.clock_out).toISOString(); if (inISO && new Date(outISO) <= new Date(inISO)) outISO = new Date(new Date(outISO).getTime() + 24 * 3600e3).toISOString(); }
+      if (inISO && outISO && new Date(outISO) <= new Date(inISO)) return send(res, 400, { error: 'เวลาออกต้องหลังเวลาเข้า' });
+      if (inISO && outISO && new Date(outISO) - new Date(inISO) > 16 * 3600e3) return send(res, 400, { error: 'กะยาวเกิน 16 ชม. — เช็กเวลาอีกที' });
+      const hrs = (inISO && outISO) ? hoursBetween(inISO, outISO) : r0.hours;
+      db.prepare('UPDATE clock_records SET clock_in=?, clock_out=?, hours=?, edit_note=? WHERE id=?').run(inISO, outISO, hrs, reason, b.record_id);
+      log(role, 'edit_clock', staffName(r0.staff_id) + ' ' + shopName(r0.shop_id) + ' ' + r0.date + ' ' + fmt(r0.clock_in) + '-' + fmt(r0.clock_out) + ' → ' + fmt(inISO) + '-' + fmt(outISO) + ' (' + reason + ')');
+      send(res, 200, { ok: true, hours: hrs }); return;
+    }
     if (p === '/api/requirement' && req.method === 'POST') {
       const role = requireRole(req, res, ['owner', 'admin']); if (!role) return;
       const b = await bodyJson(req);
@@ -941,6 +966,15 @@ async function handle(req, res) {
       db.prepare('INSERT INTO pay_status(month,staff_id,paid,paid_at) VALUES (?,?,?,?) ON CONFLICT(month,staff_id) DO UPDATE SET paid=excluded.paid, paid_at=excluded.paid_at').run(b.month, b.staff_id, b.paid ? 1 : 0, b.paid ? new Date().toISOString() : null);
       log('owner', 'pay_status', staffName(b.staff_id) + ' ' + b.month + ' paid=' + (b.paid ? 1 : 0));
       send(res, 200, { ok: true }); return;
+    }
+    if (p === '/api/owner/records') {
+      const role = requireRole(req, res, ['owner']); if (!role) return;
+      const month = u.searchParams.get('month') || new Date().toISOString().slice(0, 7);
+      const staffId = Number(u.searchParams.get('staff_id'));
+      if (!staffId) return send(res, 400, { error: 'staff_id required' });
+      const { from, to } = monthRange(month);
+      const recs = db.prepare('SELECT * FROM clock_records WHERE staff_id=? AND date BETWEEN ? AND ? ORDER BY date').all(staffId, from, to);
+      send(res, 200, { month, staff: staffName(staffId), records: recs.map(r => ({ id: r.id, date: r.date, shop: shopName(r.shop_id), clock_in: r.clock_in, clock_out: r.clock_out, hours: r.hours, source: r.source, edit_note: r.edit_note || '' })) }); return;
     }
     if (p === '/api/owner/summary') {
       const role = requireRole(req, res, ['owner']); if (!role) return;

@@ -162,6 +162,11 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{border-bottom:1px
     <div id="ownerBody" style="display:none">
       <input type="month" id="sumMonth"><button onclick="loadSummary()" data-t="showSummary">ดูสรุปยอด</button>
       <div id="summaryBox"></div>
+      <h2>แก้ไขเวลาตอกบัตร (เฉพาะเจ้าของ)</h2>
+      <p class="muted">ใครมาสายเพราะมีเหตุจำเป็น หรือลืมตอกบัตร — แก้เวลาตรงนี้ได้ ต้องใส่เหตุผลทุกครั้ง และแอปจะบันทึกไว้ในประวัติว่าแก้จากเวลาไหนเป็นเวลาไหน</p>
+      <div class="row"><select id="editStaff"></select><input type="month" id="editMonth"></div>
+      <button class="ghost" onclick="loadEditRecords()">ดูรายการตอกบัตร</button>
+      <div id="editBox"></div>
       <h2 data-t="bills">บิลส่งบริษัท / ส่งร้าน</h2>
       <select id="billStaff"></select><select id="billShop"></select>
       <button onclick="dlBill('direct')" data-t="dlDirect">โหลดบิล Nicha (Date/Timing/Hr/1.5/Total)</button>
@@ -382,6 +387,7 @@ async function loadMyLeaves(){
   }catch(e){box.innerHTML='';}
 }
 async function cancelLeaveRange(ids){if(!confirm(ids.length>1?'ยกเลิกวันลาช่วงนี้ทั้งหมด?':'ยกเลิกวันลานี้?'))return;for(const id of ids){try{await api('/api/leave/'+id,{method:'DELETE',token:staffToken});}catch(e){}}loadMyLeaves();}
+function sgtHM(iso){if(!iso)return '';const d=new Date(new Date(iso).getTime()+8*3600e3);return String(d.getUTCHours()).padStart(2,'0')+':'+String(d.getUTCMinutes()).padStart(2,'0');}
 async function loadToday(){
   try{const d=await api('/api/today-status',{token:staffToken||ownerToken||adminToken});
     const wd=['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์','เสาร์'][new Date(d.date+'T12:00:00').getDay()];
@@ -441,6 +447,7 @@ async function loadOwner(){
   const rm={};(d.rates||[]).forEach(r=>{(rm[r.staff_id]=rm[r.staff_id]||{})[r.shop_id]=r.worker_rate;});
   document.getElementById('staffDir').innerHTML=d.staff.map(s=>{const esc=v=>(v||'').replace(/"/g,'&quot;');return `<div style="border-bottom:1px solid var(--hatch-widget-border);padding:8px 0"><b>${s.name}</b> ${s.direct_company?'(direct to company)':''}<br>เบอร์: <input data-phone="${s.id}" value="${esc(s.phone)}" placeholder="เบอร์มือถือ" style="width:130px"> PayNow/บัญชี: <input data-paynow="${s.id}" value="${esc(s.paynow)}" placeholder="PayNow หรือเลขบัญชี" style="width:170px"> ชื่อบัญชี: <input data-payname="${s.id}" value="${esc(s.payname)}" placeholder="ชื่อเจ้าของบัญชี" style="width:150px"><br>เรทแยกตามร้าน:<br>${d.shops.filter(sh=>sh.active).map(sh=>`${sh.name} $<input data-shoprate="${s.id}:${sh.id}" type="number" value="${(rm[s.id]||{})[sh.id]??''}" placeholder="ว่าง = ใช้เรท ${sh.name}" style="width:80px">`).join(' ')} /ชม.<br>ประวัติ: <input data-notes="${s.id}" value="${esc(s.notes)}" placeholder="ประวัติ เช่น เริ่มงานเมื่อไหร่ หมายเหตุ" style="width:100%"><br>รหัสส่วนตัว: ${s.has_login_code?'<b>ตั้งรหัสแล้ว ✓</b>':'<span class="bad">ยังไม่มีรหัส</span>'} <input data-logincode="${s.id}" type="password" inputmode="numeric" maxlength="8" placeholder="รหัสใหม่ 4–8 ตัว" style="width:130px"> <button onclick="saveLoginCode(${s.id})">ตั้งรหัส</button><br><button onclick="savePhone(${s.id})">บันทึก</button> <button class="ghost" onclick="toggleStaff(${s.id},${s.active?0:1})">${s.active?'Deactivate (block)':'Activate'}</button> <button class="danger" onclick="deleteStaff(${s.id},'${s.name}')">ลบ</button></div>`;}).join('');
   document.getElementById('billStaff').innerHTML=d.staff.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  document.getElementById('editStaff').innerHTML=document.getElementById('billStaff').innerHTML;document.getElementById('editMonth').value=new Date().toISOString().slice(0,7);
   document.getElementById('shopDir').innerHTML=d.shops.map(s=>{const esc=v=>(v||'').replace(/"/g,'&quot;');return `<div style="border-bottom:1px solid var(--hatch-widget-border);padding:8px 0"><input data-shopname="${s.id}" value="${esc(s.name)}" style="width:150px"> เอเจนต์ $<input data-shopagent="${s.id}" type="number" value="${s.agent_rate}" style="width:70px"> เด็ก $<input data-shopworker="${s.id}" type="number" value="${s.worker_rate}" style="width:70px"> <button onclick="saveShop(${s.id})">บันทึก</button> <button class="ghost" onclick="toggleShop(${s.id},${s.active?0:1})">${s.active?'เปิดอยู่':'ปิดอยู่ — กดเปิด'}</button></div>`;}).join('');
   const fill=(id)=>{document.getElementById(id).innerHTML=d.staff.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')};['schStaff','bfStaff','schCover'].forEach(fill);
   loadCoverRequests();
@@ -460,6 +467,17 @@ async function addStaff(){const n=document.getElementById('newStaffName').value,
 async function addShift(){try{await api('/api/shift',{method:'POST',token:adminToken||ownerToken,body:JSON.stringify({staff_id:Number(document.getElementById('schStaff').value),shop_id:Number(document.getElementById('schShop').value),date:document.getElementById('schDate').value,time_start:document.getElementById('schStart').value,time_end:document.getElementById('schEnd').value,covers_for_id:Number(document.getElementById('schCover').value)||null})});alert('Shift added');}catch(e){alert('ลงกะไม่ได้: '+e.message);}}
 async function loadSchedule(){const d=await api('/api/schedule?from='+document.getElementById('schDate').value+'&to='+document.getElementById('schDate').value,{token:adminToken||ownerToken});document.getElementById('schedBox').innerHTML=d.shifts.map(s=>`${s.date} ${s.shop} ${s.staff} ${s.time_start}-${s.time_end} ${s.covers_for?('covers '+s.covers_for):''}`).join('<br>')||'—';}
 async function backfill(){await api('/api/backfill',{method:'POST',token:adminToken||ownerToken,body:JSON.stringify({staff_id:Number(document.getElementById('bfStaff').value),shop_id:Number(document.getElementById('bfShop').value),date:document.getElementById('bfDate').value,clock_in:document.getElementById('bfIn').value,clock_out:document.getElementById('bfOut').value})});alert('Backfilled');}
+async function loadEditRecords(){
+  const sid=document.getElementById('editStaff').value,m=document.getElementById('editMonth').value||new Date().toISOString().slice(0,7);
+  try{const d=await api('/api/owner/records?staff_id='+sid+'&month='+m,{token:ownerToken});
+    document.getElementById('editBox').innerHTML=d.records.map(r=>`<div style="border-bottom:1px solid #eee;padding:8px 0">${r.date} · ${r.shop} · ${sgtHM(r.clock_in)}–${sgtHM(r.clock_out)} · ${r.hours==null?'':r.hours+' ชม.'}${r.source==='backfill'?' (ลงย้อนหลัง)':''}${r.edit_note?'<br><span class="muted">แก้ไขแล้ว: '+r.edit_note+'</span>':''}<br>เข้า <input type="time" id="editIn-${r.id}" value="${sgtHM(r.clock_in)}" style="width:110px"> ออก <input type="time" id="editOut-${r.id}" value="${sgtHM(r.clock_out)}" style="width:110px"> เหตุผล <input id="editReason-${r.id}" placeholder="เช่น ลืมตอกบัตรตอนมาถึง" style="width:170px"> <button onclick="saveEditTime(${r.id})">บันทึกเวลา</button></div>`).join('')||'ไม่มีรายการเดือนนี้';
+  }catch(e){document.getElementById('editBox').innerHTML='<p>ดูไม่ได้: '+e.message+'</p>';}
+}
+async function saveEditTime(id){
+  const ci=document.getElementById('editIn-'+id).value,co=document.getElementById('editOut-'+id).value,rs=document.getElementById('editReason-'+id).value.trim();
+  if(!rs){alert('ใส่เหตุผลที่แก้ไขด้วยค่ะ');return;}
+  try{const d=await api('/api/clock-record/edit',{method:'POST',token:ownerToken,body:JSON.stringify({record_id:id,clock_in:ci,clock_out:co,reason:rs})});alert('แก้เวลาแล้ว: '+d.hours+' ชม.');loadEditRecords();}catch(e){alert('แก้ไม่ได้: '+e.message);}
+}
 async function loadAlerts(){const d=await api('/api/alerts?from='+new Date().toISOString().slice(0,10)+'&to='+new Date(Date.now()+7*864e5).toISOString().slice(0,10),{token:adminToken||ownerToken});document.getElementById('alertBox').innerHTML=d.alerts.map(a=>`${a.date} ${a.shop}: need ${a.required}, scheduled ${a.scheduled} — short ${a.short_by}`).join('<br>')||'No shortages';}
 let bdSel=null, bdData=null;
 const CORE_ORDER=['Nicha','Nonney','Pear','Natty','Koiz'];
