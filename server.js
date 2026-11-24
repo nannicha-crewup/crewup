@@ -493,7 +493,6 @@ async function handle(req, res) {
           if (riderPaid) { warnings.push(staffName(riderPaid.staff_id) + ' ลงค่าแท็กซี่คืนนี้ไว้แล้ว ($' + riderPaid.taxi_amount + ') — ค่ารถคันเดียวกันลงได้แค่คนจ่ายคนเดียว ตอกออกแล้ว ค่าแท็กซี่ของเธอไม่ได้บันทึก'); taxiAmt = 0; }
         }
       }
-      if (transportMode === 'company' && !b.company_transport_at) warnings.push('ใช้รถบริษัท — ใส่เวลารถออกด้วย');
       if (!simple && transportMode === 'taxi' && taxiAmt > 0) {
         const rule = baesRule();
         const cap = rule ? rule.taxi_cap_per_head : 20;
@@ -533,7 +532,6 @@ async function handle(req, res) {
         if (per_head > cap) warnings.push(`แท็กซี่ $${per_head}/คน เกินเพดาน $${cap}/คน (${heads} คน) — เบิกได้สูงสุด $${cap * heads}`);
         if (!b.taxi_receipt_no && !b.receipt_photo) warnings.push('ต้องมีใบเสร็จถึงจะเบิกค่าแท็กซี่ได้');
       }
-      if (transportMode === 'company' && !b.company_transport_at) warnings.push('ใช้รถบริษัท — ใส่เวลารถออกด้วย');
       db.prepare('UPDATE clock_records SET taxi_amount=?, taxi_payer=?, taxi_receipt_no=?, riders=?, receipt_photo=?, transport_mode=?, company_transport_at=?, taxi_warning=? WHERE id=?')
         .run(taxiAmt, b.taxi_payer || '', b.taxi_receipt_no || '', JSON.stringify(riders), (b.receipt_photo || '').slice(0, 500000), transportMode, b.company_transport_at || '', warnings.join('; '), b.record_id);
       const capped = cappedTaxi({ shop_id: rec.shop_id, taxi_amount: taxiAmt, riders: JSON.stringify(riders), transport_mode: transportMode });
