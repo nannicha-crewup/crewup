@@ -583,6 +583,28 @@ async function handle(req, res) {
       send(res, 200, { ok: true }); return;
     }
     // ---- admin / owner (PIN) ----
+    if (p === '/api/owner/shifts' && req.method === 'POST') {
+      // Bulk seed scheduled shifts (owner only). Body: {shifts:[{staff,shop,date,time_start,time_end,covers_for,force}]}
+      // staff/shop may be a name or an id. Duplicates (same staff+shop+date) are skipped.
+      const role = requireRole(req, res, ['owner']); if (!role) return;
+      const b = await bodyJson(req);
+      const list = Array.isArray(b.shifts) ? b.shifts : [];
+      let inserted = 0, skipped = 0; const errors = [];
+      for (const s of list) {
+        const staffRow = s.staff_id ? db.prepare('SELECT id FROM staff WHERE id=?').get(Number(s.staff_id)) : db.prepare('SELECT id FROM staff WHERE lower(name)=?').get(String(s.staff || '').trim().toLowerCase());
+        const shopRow = s.shop_id ? db.prepare('SELECT * FROM shops WHERE id=?').get(Number(s.shop_id)) : db.prepare('SELECT * FROM shops WHERE lower(name)=?').get(String(s.shop || '').trim().toLowerCase());
+        if (!staffRow || !shopRow || !s.date) { errors.push((s.staff || s.staff_id || '?') + ' / ' + (s.shop || s.shop_id || '?') + ' / ' + (s.date || '?') + ': unknown staff, shop or date'); continue; }
+        if (db.prepare('SELECT 1 FROM shifts WHERE staff_id=? AND shop_id=? AND date=?').get(staffRow.id, shopRow.id, s.date)) { skipped++; continue; }
+        if (shopRow.name === "Bae's" && !baesOpen(s.date) && !s.force) { errors.push(staffName(staffRow.id) + ' ' + shopRow.name + ' ' + s.date + ": Bae's is closed that day"); continue; }
+        let ts = s.time_start || '23:00', te = s.time_end || '';
+        if (!te) te = shopRow.name === "Bae's" ? baesClose(s.date) : '03:00';
+        let covers = null;
+        if (s.covers_for) { const c = db.prepare('SELECT id FROM staff WHERE lower(name)=?').get(String(s.covers_for).trim().toLowerCase()); covers = c ? c.id : null; }
+        db.prepare('INSERT INTO shifts(staff_id,shop_id,date,time_start,time_end,covers_for_id,created_by) VALUES (?,?,?,?,?,?,?)').run(staffRow.id, shopRow.id, s.date, ts, te, covers, role);
+        inserted++;
+      }
+      send(res, 200, { ok: true, inserted, skipped, errors }); return;
+    }
     if (p === '/api/shift' && req.method === 'POST') {
       const role = requireRole(req, res, ['owner', 'admin']); if (!role) return;
       const b = await bodyJson(req);
