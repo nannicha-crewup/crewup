@@ -210,6 +210,32 @@ function hoursBetween(a, b) {
   const ms = new Date(b) - new Date(a);
   return ms > 0 ? +(ms / 3600000).toFixed(2) : 0;
 }
+function addDays(dateStr, n) { const d = new Date(dateStr + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+function shiftWindow(shopId, date, staffId) {
+  // Scheduled shift window (SGT HH:MM) for this shop+date. Prefer the roster
+  // shift row when it exists; otherwise the shop default (Bae's/Milli
+  // 23:00-03:00, 23:00-04:00 Sat & public-holiday eve; Bungalow 22:30-03:00).
+  const shop = shopName(shopId);
+  let start = '23:00', end = baesClose(date);
+  if (shop === 'Bungalow') { start = '22:30'; end = '03:00'; }
+  if (staffId) {
+    const s = db.prepare('SELECT time_start, time_end FROM shifts WHERE staff_id=? AND date=? AND shop_id=?').get(staffId, date, shopId);
+    if (s && s.time_start && s.time_end) return { start: s.time_start, end: s.time_end };
+  }
+  return { start, end };
+}
+function clampedHours(inISO, outISO, shopId, date, staffId) {
+  // Hours counted = time actually inside the scheduled shift window.
+  // Clocking in early or out late no longer inflates a 4h shift; clocking
+  // in late still prorates (e.g. 23:40 in -> 3.33h).
+  const w = shiftWindow(shopId, date, staffId);
+  const ws = new Date(date + 'T' + w.start + ':00+08:00').getTime();
+  let we = new Date(date + 'T' + w.end + ':00+08:00').getTime();
+  if (we <= ws) we += 24 * 3600e3;
+  const a = Math.max(new Date(inISO).getTime(), ws);
+  const b = Math.min(new Date(outISO).getTime(), we);
+  return b > a ? +((b - a) / 3600000).toFixed(2) : 0;
+}
 function shopName(id) { const s = db.prepare('SELECT name FROM shops WHERE id=?').get(id); return s ? s.name : ''; }
 function staffName(id) { const s = db.prepare('SELECT name FROM staff WHERE id=?').get(id); return s ? s.name : ''; }
 function monthRange(month) { // 'YYYY-MM'
@@ -444,36 +470,75 @@ async function handle(req, res) {
       const st = db.prepare('SELECT * FROM staff WHERE id=?').get(rec.staff_id);
       if (!st || !st.active) return send(res, 403, { error: 'staff deactivated' });
       const now = new Date();
-      const hrs = hoursBetween(rec.clock_in, now.toISOString());
-      // Bae's taxi rule: max $20/head with receipt; otherwise company transport.
-      const riders = b.riders || [];
-      const transportMode = b.transport_mode || 'taxi';
-      let taxiAmt = Number(b.taxi_amount || 0);
+      const hrs = clampedHours(rec.clock_in, now.toISOString(), rec.shop_id, rec.date, rec.staff_id);
+      // Clock-out must never fail because of taxi: the taxi is saved
+      // separately (see /api/clock-record/taxi), so a duplicate-car problem
+      // only drops the taxi amount here and warns — the out-time is recorded.
+      const warnings = [];
+      const simple = !!b.simple;
+      const riders = simple ? [] : (b.riders || []);
+      const transportMode = simple ? 'taxi' : (b.transport_mode || 'taxi');
+      let taxiAmt = simple ? 0 : Number(b.taxi_amount || 0);
       if (transportMode === 'company') taxiAmt = 0;
       // One car, one total, one payer: the full cab fare is entered once, on the
       // payer's own record (reimburse = min(total, $20 x heads) to that payer).
       // Stop the same car being entered a second time by a rider.
-      if (transportMode === 'taxi' && taxiAmt > 0) {
+      if (!simple && transportMode === 'taxi' && taxiAmt > 0) {
         const tonight = db.prepare("SELECT * FROM clock_records WHERE shop_id=? AND date=? AND clock_out IS NOT NULL AND taxi_amount>0").all(rec.shop_id, rec.date);
         const riderIds = riders.map(Number);
         const paidByOther = tonight.find(r => r.staff_id !== rec.staff_id && JSON.parse(r.riders || '[]').map(Number).includes(rec.staff_id));
-        if (paidByOther) return send(res, 400, { error: staffName(paidByOther.staff_id) + ' ลงค่าแท็กซี่คืนนี้ไว้แล้ว ($' + paidByOther.taxi_amount + ' ทั้งคัน) — เธอนั่งมาด้วยกัน ใส่ 0 ได้เลย' });
-        const riderPaid = tonight.find(r => r.staff_id !== rec.staff_id && riderIds.includes(r.staff_id));
-        if (riderPaid) return send(res, 400, { error: staffName(riderPaid.staff_id) + ' ลงค่าแท็กซี่คืนนี้ไว้แล้ว ($' + riderPaid.taxi_amount + ') — ค่ารถคันเดียวกันลงได้แค่คนจ่ายคนเดียว ให้เจ้าของช่วยเช็ก' });
+        if (paidByOther) { warnings.push(staffName(paidByOther.staff_id) + ' ลงค่าแท็กซี่คืนนี้ไว้แล้ว ($' + paidByOther.taxi_amount + ' ทั้งคัน) — ตอกออกแล้ว ค่าแท็กซี่ของเธอไม่ได้บันทึก'); taxiAmt = 0; }
+        else {
+          const riderPaid = tonight.find(r => r.staff_id !== rec.staff_id && riderIds.includes(r.staff_id));
+          if (riderPaid) { warnings.push(staffName(riderPaid.staff_id) + ' ลงค่าแท็กซี่คืนนี้ไว้แล้ว ($' + riderPaid.taxi_amount + ') — ค่ารถคันเดียวกันลงได้แค่คนจ่ายคนเดียว ตอกออกแล้ว ค่าแท็กซี่ของเธอไม่ได้บันทึก'); taxiAmt = 0; }
+        }
       }
-      const warnings = [];
-      if (transportMode === 'company' && !b.company_transport_at) warnings.push('company transport used — record departure time');
-      if (transportMode === 'taxi' && taxiAmt > 0) {
+      if (transportMode === 'company' && !b.company_transport_at) warnings.push('ใช้รถบริษัท — ใส่เวลารถออกด้วย');
+      if (!simple && transportMode === 'taxi' && taxiAmt > 0) {
         const rule = baesRule();
         const cap = rule ? rule.taxi_cap_per_head : 20;
         const { heads, per_head } = taxiPerHead(taxiAmt, riders);
-        if (per_head > cap) warnings.push(`taxi $${per_head}/head exceeds $${cap}/head cap (${heads} heads) — reimburse max $${cap * heads}`);
-        if (!b.taxi_receipt_no && !b.receipt_photo) warnings.push('receipt required for taxi reimbursement');
+        if (per_head > cap) warnings.push(`แท็กซี่ $${per_head}/คน เกินเพดาน $${cap}/คน (${heads} คน) — เบิกได้สูงสุด $${cap * heads}`);
+        if (!b.taxi_receipt_no && !b.receipt_photo) warnings.push('ต้องมีใบเสร็จถึงจะเบิกค่าแท็กซี่ได้');
       }
       db.prepare('UPDATE clock_records SET clock_out=?, hours=?, taxi_amount=?, taxi_payer=?, taxi_receipt_no=?, taxi_remark=?, riders=?, photo_out=?, receipt_photo=?, transport_mode=?, company_transport_at=?, taxi_warning=? WHERE id=?')
         .run(now.toISOString(), hrs, taxiAmt, b.taxi_payer || '', b.taxi_receipt_no || '', b.taxi_remark || '', JSON.stringify(riders), (b.photo || '').slice(0, 500000), (b.receipt_photo || '').slice(0, 500000), transportMode, b.company_transport_at || '', warnings.join('; '), b.record_id);
       log(st.name, 'clock_out', shopName(rec.shop_id) + ' ' + rec.date + ' ' + hrs + 'h taxi $' + taxiAmt + (transportMode === 'company' ? ' (company transport)' : '') + (warnings.length ? ' WARNING: ' + warnings.join('; ') : ''));
       send(res, 200, { ok: true, hours: hrs, warnings }); return;
+    }
+    if (p === '/api/clock-record/taxi' && req.method === 'POST') {
+      // Save / correct the ride-home taxi for a shift, separately from
+      // clocking out. Clock-out itself never depends on this, so a taxi
+      // problem can never block anyone from clocking out.
+      const me = requireStaff(req, res); if (!me) return;
+      const b = await bodyJson(req);
+      const rec = db.prepare('SELECT * FROM clock_records WHERE id=?').get(b.record_id);
+      if (!rec) return send(res, 400, { error: 'ไม่พบกะนี้' });
+      if (rec.staff_id !== me.id) return send(res, 403, { error: 'แก้ค่าแท็กซี่ได้เฉพาะกะของตัวเอง' });
+      const riders = b.riders || [];
+      const transportMode = b.transport_mode || 'taxi';
+      let taxiAmt = Number(b.taxi_amount || 0);
+      if (transportMode === 'company') taxiAmt = 0;
+      const warnings = [];
+      if (transportMode === 'taxi' && taxiAmt > 0) {
+        const tonight = db.prepare("SELECT * FROM clock_records WHERE shop_id=? AND date=? AND clock_out IS NOT NULL AND taxi_amount>0").all(rec.shop_id, rec.date);
+        const riderIds = riders.map(Number);
+        const paidByOther = tonight.find(r => r.staff_id !== rec.staff_id && JSON.parse(r.riders || '[]').map(Number).includes(rec.staff_id));
+        if (paidByOther) return send(res, 400, { error: staffName(paidByOther.staff_id) + ' ลงค่าแท็กซี่คืนนี้ไว้แล้ว ($' + paidByOther.taxi_amount + ' ทั้งคัน) — เธอนั่งมาด้วยกันแล้ว' });
+        const riderPaid = tonight.find(r => r.staff_id !== rec.staff_id && riderIds.includes(r.staff_id));
+        if (riderPaid) return send(res, 400, { error: staffName(riderPaid.staff_id) + ' ลงค่าแท็กซี่คืนนี้ไว้แล้ว ($' + riderPaid.taxi_amount + ') — ค่ารถคันเดียวกันลงได้แค่คนจ่ายคนเดียว' });
+        const rule = baesRule();
+        const cap = rule ? rule.taxi_cap_per_head : 20;
+        const { heads, per_head } = taxiPerHead(taxiAmt, riders);
+        if (per_head > cap) warnings.push(`แท็กซี่ $${per_head}/คน เกินเพดาน $${cap}/คน (${heads} คน) — เบิกได้สูงสุด $${cap * heads}`);
+        if (!b.taxi_receipt_no && !b.receipt_photo) warnings.push('ต้องมีใบเสร็จถึงจะเบิกค่าแท็กซี่ได้');
+      }
+      if (transportMode === 'company' && !b.company_transport_at) warnings.push('ใช้รถบริษัท — ใส่เวลารถออกด้วย');
+      db.prepare('UPDATE clock_records SET taxi_amount=?, taxi_payer=?, taxi_receipt_no=?, riders=?, receipt_photo=?, transport_mode=?, company_transport_at=?, taxi_warning=? WHERE id=?')
+        .run(taxiAmt, b.taxi_payer || '', b.taxi_receipt_no || '', JSON.stringify(riders), (b.receipt_photo || '').slice(0, 500000), transportMode, b.company_transport_at || '', warnings.join('; '), b.record_id);
+      const capped = cappedTaxi({ shop_id: rec.shop_id, taxi_amount: taxiAmt, riders: JSON.stringify(riders), transport_mode: transportMode });
+      log(me.name, 'taxi_save', shopName(rec.shop_id) + ' ' + rec.date + ' taxi $' + taxiAmt + ' payer ' + (b.taxi_payer || '') + (warnings.length ? ' WARNING: ' + warnings.join('; ') : ''));
+      send(res, 200, { ok: true, taxi_amount: taxiAmt, capped, warnings }); return;
     }
     if (p === '/api/my-status') {
       const me = requireStaff(req, res); if (!me) return;
@@ -482,7 +547,9 @@ async function handle(req, res) {
       const open = db.prepare('SELECT * FROM clock_records WHERE staff_id=? AND clock_out IS NULL').get(sid);
       const today = new Date().toISOString().slice(0, 10);
       const shifts = db.prepare('SELECT * FROM shifts WHERE staff_id=? AND date=?').all(sid, today);
-      send(res, 200, { open: open ? { id: open.id, shop_id: open.shop_id, shop: shopName(open.shop_id), clock_in: open.clock_in } : null, shifts: shifts.map(s => ({ ...s, shop: shopName(s.shop_id), covers_for: s.covers_for_id ? staffName(s.covers_for_id) : null })) }); return;
+      const lc = db.prepare('SELECT * FROM clock_records WHERE staff_id=? AND clock_out IS NOT NULL ORDER BY clock_out DESC LIMIT 1').get(sid);
+      const lastClosed = lc ? { id: lc.id, shop_id: lc.shop_id, shop: shopName(lc.shop_id), date: lc.date, clock_in: lc.clock_in, clock_out: lc.clock_out, hours: lc.hours, taxi_amount: lc.taxi_amount || 0, taxi_payer: lc.taxi_payer || '', taxi_receipt_no: lc.taxi_receipt_no || '', riders: JSON.parse(lc.riders || '[]'), transport_mode: lc.transport_mode || 'taxi', company_transport_at: lc.company_transport_at || '' } : null;
+      send(res, 200, { open: open ? { id: open.id, shop_id: open.shop_id, shop: shopName(open.shop_id), clock_in: open.clock_in } : null, shifts: shifts.map(s => ({ ...s, shop: shopName(s.shop_id), covers_for: s.covers_for_id ? staffName(s.covers_for_id) : null })), last_closed: lastClosed }); return;
     }
     if (p === '/api/owner/agent-hours') {
       // Owner viewing her OWN hours: the owner is Nicha, the staff member flagged
@@ -749,7 +816,7 @@ async function handle(req, res) {
       const b = await bodyJson(req);
       const st = db.prepare('SELECT * FROM staff WHERE id=?').get(b.staff_id);
       if (!st || !st.active) return send(res, 403, { error: 'staff deactivated' });
-      const hrs = hoursBetween(b.clock_in, b.clock_out);
+      const hrs = clampedHours(b.clock_in, b.clock_out, b.shop_id, b.date, b.staff_id);
       const r = db.prepare('INSERT INTO clock_records(staff_id,shop_id,date,clock_in,clock_out,hours,is_15x,covers_for_id,taxi_amount,taxi_payer,taxi_receipt_no,taxi_remark,riders,source,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
         .run(b.staff_id, b.shop_id, b.date, b.clock_in, b.clock_out, hrs, is15x(b.date) ? 1 : 0, b.covers_for_id || null, Number(b.taxi_amount || 0), b.taxi_payer || '', b.taxi_receipt_no || '', b.taxi_remark || '', JSON.stringify(b.riders || []), 'backfill', new Date().toISOString());
       log(role, 'backfill', st.name + ' ' + shopName(b.shop_id) + ' ' + b.date + ' ' + hrs + 'h');
@@ -766,15 +833,18 @@ async function handle(req, res) {
       const r0 = db.prepare('SELECT * FROM clock_records WHERE id=?').get(b.record_id);
       if (!r0) return send(res, 400, { error: 'record not found' });
       const hhmm = t => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(t || ''));
-      // Times are Singapore HH:MM on the record's date; out rolls to next day when needed.
-      const toISO = t => new Date(r0.date + 'T' + t + ':00+08:00');
+      // Times are Singapore HH:MM. The shift evening belongs to the record's
+      // date, the early morning (00:00-11:59) to the next day — so 23:00 is
+      // the evening of r0.date and 03:00 the morning after. Out rolls to
+      // next day when needed.
+      const toISO = t => { const h = Number(String(t).split(':')[0]); const day = h >= 12 ? r0.date : addDays(r0.date, 1); return new Date(day + 'T' + t + ':00+08:00'); };
       const fmt = iso => { if (!iso) return '-'; const d = new Date(new Date(iso).getTime() + 8 * 3600e3); return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0'); };
       let inISO = r0.clock_in, outISO = r0.clock_out;
       if (b.clock_in !== undefined && b.clock_in !== null && b.clock_in !== '') { if (!hhmm(b.clock_in)) return send(res, 400, { error: 'เวลาเข้าไม่ถูก (HH:MM)' }); inISO = toISO(b.clock_in).toISOString(); }
       if (b.clock_out !== undefined && b.clock_out !== null && b.clock_out !== '') { if (!hhmm(b.clock_out)) return send(res, 400, { error: 'เวลาออกไม่ถูก (HH:MM)' }); outISO = toISO(b.clock_out).toISOString(); if (inISO && new Date(outISO) <= new Date(inISO)) outISO = new Date(new Date(outISO).getTime() + 24 * 3600e3).toISOString(); }
       if (inISO && outISO && new Date(outISO) <= new Date(inISO)) return send(res, 400, { error: 'เวลาออกต้องหลังเวลาเข้า' });
       if (inISO && outISO && new Date(outISO) - new Date(inISO) > 16 * 3600e3) return send(res, 400, { error: 'กะยาวเกิน 16 ชม. — เช็กเวลาอีกที' });
-      const hrs = (inISO && outISO) ? hoursBetween(inISO, outISO) : r0.hours;
+      const hrs = (inISO && outISO) ? clampedHours(inISO, outISO, r0.shop_id, r0.date, r0.staff_id) : r0.hours;
       db.prepare('UPDATE clock_records SET clock_in=?, clock_out=?, hours=?, edit_note=? WHERE id=?').run(inISO, outISO, hrs, reason, b.record_id);
       log(role, 'edit_clock', staffName(r0.staff_id) + ' ' + shopName(r0.shop_id) + ' ' + r0.date + ' ' + fmt(r0.clock_in) + '-' + fmt(r0.clock_out) + ' → ' + fmt(inISO) + '-' + fmt(outISO) + ' (' + reason + ')');
       send(res, 200, { ok: true, hours: hrs }); return;
