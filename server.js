@@ -65,14 +65,16 @@ try { db.exec("ALTER TABLE otp_codes ADD COLUMN code TEXT DEFAULT ''"); } catch 
 try { db.exec("ALTER TABLE clock_records ADD COLUMN transport_mode TEXT DEFAULT 'taxi'"); } catch (e) {}
 try { db.exec("ALTER TABLE clock_records ADD COLUMN company_transport_at TEXT DEFAULT ''"); } catch (e) {}
 try { db.exec("ALTER TABLE clock_records ADD COLUMN taxi_warning TEXT DEFAULT ''"); } catch (e) {}
-// Bae's shop rules: open Wed-Sat, 11pm-3am Wed-Fri, 11pm-4am Sat & public-holiday eve, Tanjong Pagar.
+// Bae's shop rules: open Tue-Sat, 11pm-3am Tue-Fri, 11pm-4am Sat & public-holiday eve, Tanjong Pagar.
 // Taxi home reimbursed max $20/head with receipt; otherwise company transport 0.5-1h after close.
 try {
   const baes = db.prepare("SELECT id FROM shops WHERE name=?").get("Bae's");
   if (baes && !db.prepare('SELECT 1 FROM shop_rules WHERE shop_id=?').get(baes.id)) {
     db.prepare('INSERT INTO shop_rules(shop_id,open_weekdays,close_weekday,close_sat_phe,location,taxi_cap_per_head) VALUES (?,?,?,?,?,?)')
-      .run(baes.id, JSON.stringify([3, 4, 5, 6]), '03:00', '04:00', 'Tanjong Pagar', 20);
+      .run(baes.id, JSON.stringify([2, 3, 4, 5, 6]), '03:00', '04:00', 'Tanjong Pagar', 20);
   }
+  // Bae's opened Tue-Sat from 24 Nov 2026 (was Wed-Sat): migrate existing rows.
+  if (baes) db.prepare('UPDATE shop_rules SET open_weekdays=? WHERE shop_id=? AND open_weekdays=?').run(JSON.stringify([2, 3, 4, 5, 6]), baes.id, JSON.stringify([3, 4, 5, 6]));
   for (const [d, label] of [['2026-11-07', 'Deepavali eve'], ['2026-12-24', 'Christmas eve'], ['2026-12-31', "New Year's eve"]])
     db.prepare('INSERT OR IGNORE INTO ph_eves(date,label) VALUES (?,?)').run(d, label);
   // Bae's pays 1.5x on 24 & 31 Dec — mark them as special (1.5x) days too, so pay
@@ -82,7 +84,7 @@ try {
 } catch (e) {}
 function isPHEve(date) { return !!db.prepare('SELECT 1 FROM ph_eves WHERE date=?').get(date); }
 function baesRule() { const b = db.prepare("SELECT id FROM shops WHERE name=?").get("Bae's"); return b ? db.prepare('SELECT * FROM shop_rules WHERE shop_id=?').get(b.id) : null; }
-function baesOpen(date) { const wd = new Date(date + 'T12:00:00').getDay(); return [3, 4, 5, 6].includes(wd); }
+function baesOpen(date) { const wd = new Date(date + 'T12:00:00').getDay(); return [2, 3, 4, 5, 6].includes(wd); }
 function baesClose(date) { const wd = new Date(date + 'T12:00:00').getDay(); return (wd === 6 || isPHEve(date)) ? '04:00' : '03:00'; }
 function taxiPerHead(amount, riders) { const heads = 1 + (riders || []).length; return { heads, per_head: +(amount / heads).toFixed(2) }; }
 function cappedTaxi(rec) {
@@ -578,10 +580,10 @@ async function handle(req, res) {
     if (p === '/api/shift' && req.method === 'POST') {
       const role = requireRole(req, res, ['owner', 'admin']); if (!role) return;
       const b = await bodyJson(req);
-      // Bae's is open Wed-Sat only, 11pm-3am (Wed-Fri) / 11pm-4am (Sat & PH eve).
+      // Bae's is open Tue-Sat only, 11pm-3am (Tue-Fri) / 11pm-4am (Sat & PH eve).
       const shop = db.prepare('SELECT * FROM shops WHERE id=?').get(b.shop_id);
       if (shop && shop.name === "Bae's" && b.date) {
-        if (!baesOpen(b.date) && !b.force) return send(res, 400, { error: "Bae's is closed Sun-Tue (open Wed-Sat, Tanjong Pagar)", closed: true });
+        if (!baesOpen(b.date) && !b.force) return send(res, 400, { error: "Bae's is closed Sun-Mon (open Tue-Sat, Tanjong Pagar)", closed: true });
         if (!b.time_start) b.time_start = '23:00';
         if (!b.time_end) b.time_end = baesClose(b.date);
       }
@@ -773,7 +775,7 @@ async function handle(req, res) {
     if (p === '/api/shop-rules') {
       if (!auth(req) && !staffAuth(req)) return send(res, 401, { error: 'login required' });
       const rules = db.prepare('SELECT * FROM shop_rules').all().map(r => ({ shop_id: r.shop_id, shop: shopName(r.shop_id), open_weekdays: JSON.parse(r.open_weekdays || '[]'), close_weekday: r.close_weekday, close_sat_phe: r.close_sat_phe, location: r.location, taxi_cap_per_head: r.taxi_cap_per_head }));
-      send(res, 200, { rules, ph_eves: db.prepare('SELECT * FROM ph_eves ORDER BY date').all(), baes_hours: "Bae's: Wed-Sat, 11pm-3am Wed-Fri, 11pm-4am Sat & public-holiday eve, Tanjong Pagar. Taxi home max $20/head with receipt, otherwise company transport 0.5-1h after close." }); return;
+      send(res, 200, { rules, ph_eves: db.prepare('SELECT * FROM ph_eves ORDER BY date').all(), baes_hours: "Bae's: Tue-Sat, 11pm-3am Tue-Fri, 11pm-4am Sat & public-holiday eve, Tanjong Pagar. Taxi home max $20/head with receipt, otherwise company transport 0.5-1h after close." }); return;
     }
     if (p === '/api/ph-eve' && req.method === 'POST') {
       const role = requireRole(req, res, ['owner']); if (!role) return;
