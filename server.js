@@ -507,19 +507,35 @@ async function handle(req, res) {
     if (p === '/api/leave' && req.method === 'POST') {
       const me = requireStaff(req, res); if (!me) return;
       const b = await bodyJson(req);
-      const date = String(b.date || '');
       const type = String(b.type || '');
       const reason = String(b.reason || '').trim().slice(0, 120);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return send(res, 400, { error: 'date required (YYYY-MM-DD)' });
+      // Date range: {date_from, date_to}. Old single {date} still works (from = to = date).
+      const dateFrom = String(b.date_from || b.date || '');
+      const dateTo = String(b.date_to || b.date || '');
+      const bad = d => !/^\d{4}-\d{2}-\d{2}$/.test(d) || isNaN(new Date(d + 'T00:00:00Z'));
+      if (bad(dateFrom) || bad(dateTo)) return send(res, 400, { error: 'date required (YYYY-MM-DD)' });
       if (!LEAVE_TYPES.includes(type)) return send(res, 400, { error: 'type must be ลาป่วย, ลากิจ or ลาพักร้อน' });
       const today = new Date().toISOString().slice(0, 10);
-      if (date < today) return send(res, 400, { error: 'ลาวันย้อนหลังไม่ได้ — เลือกวันตั้งแต่วันนี้เป็นต้นไป' });
-      const dup = db.prepare('SELECT id FROM leaves WHERE staff_id=? AND date=?').get(me.id, date);
-      if (dup) return send(res, 400, { error: 'ขอลาวันนี้ไปแล้ว' });
-      const r = db.prepare('INSERT INTO leaves(staff_id,date,type,reason,created_at) VALUES (?,?,?,?,?)').run(me.id, date, type, reason, new Date().toISOString());
-      db.prepare('DELETE FROM availability WHERE staff_id=? AND date=?').run(me.id, date);
-      log(me.name, 'leave_request', me.name + ' ขอลา ' + date + ' (' + type + ')' + (reason ? ' — ' + reason : ''));
-      send(res, 200, { ok: true, id: Number(r.lastInsertRowid) }); return;
+      if (dateFrom < today) return send(res, 400, { error: 'ลาวันย้อนหลังไม่ได้ — เลือกวันตั้งแต่วันนี้เป็นต้นไป' });
+      if (dateTo < dateFrom) return send(res, 400, { error: 'วันสิ้นสุดต้องไม่ก่อนวันเริ่มต้น' });
+      const days = [];
+      for (let d = new Date(dateFrom + 'T00:00:00Z'); d <= new Date(dateTo + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1)) days.push(d.toISOString().slice(0, 10));
+      if (days.length > 31) return send(res, 400, { error: 'ขอลาได้ครั้งละไม่เกิน 31 วัน' });
+      const ins = db.prepare('INSERT INTO leaves(staff_id,date,type,reason,created_at) VALUES (?,?,?,?,?)');
+      const dupQ = db.prepare('SELECT id FROM leaves WHERE staff_id=? AND date=?');
+      const delAv = db.prepare('DELETE FROM availability WHERE staff_id=? AND date=?');
+      const now = new Date().toISOString();
+      let added = 0, skipped = 0; const ids = [];
+      for (const d of days) {
+        if (dupQ.get(me.id, d)) { skipped++; continue; }
+        ids.push(Number(ins.run(me.id, d, type, reason, now).lastInsertRowid));
+        delAv.run(me.id, d);
+        added++;
+      }
+      if (!added) return send(res, 400, { error: 'ขอลาวันนี้ไปแล้ว' });
+      const rangeTxt = days.length > 1 ? dateFrom + '–' + dateTo + ' (' + added + ' วัน)' : dateFrom;
+      log(me.name, 'leave_request', me.name + ' ขอลา ' + rangeTxt + ' (' + type + ')' + (reason ? ' — ' + reason : '') + (skipped ? ' — ข้าม ' + skipped + ' วันที่ขอลาไปแล้ว' : ''));
+      send(res, 200, { ok: true, id: ids.length ? ids[0] : null, ids, added, skipped }); return;
     }
     if (p === '/api/leaves/mine') {
       const me = requireStaff(req, res); if (!me) return;

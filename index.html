@@ -84,8 +84,9 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{border-bottom:1px
     <button onclick="saveAvail()" data-t="save">บันทึกวันว่าง</button>
     <hr>
     <h2>ขอลาวัน</h2>
-    <p class="muted">ลาวันไหน วันที่ลาจะถูกเอาออกจากวันว่างให้อัตโนมัติ (ถ้ามีกะวันนั้นอยู่แล้ว เจ้าของจะเห็นว่าต้องหาคนแทน)</p>
-    <input type="date" id="leaveReqDate">
+    <p class="muted">ลาวันไหน วันที่ลาจะถูกเอาออกจากวันว่างให้อัตโนมัติ (ลาหลายวันติดกันได้ เลือกตั้งแต่วันที่ถึงวันที่ — ถ้ามีกะวันนั้นอยู่แล้ว เจ้าของจะเห็นว่าต้องหาคนแทน)</p>
+    <div class="row"><label>ตั้งแต่วันที่ <input type="date" id="leaveReqFrom"></label><label>ถึงวันที่ <input type="date" id="leaveReqTo"></label></div>
+    <select id="leaveReqType"><option value="ลาป่วย">ลาป่วย</option><option value="ลากิจ">ลากิจ</option><option value="ลาพักร้อน">ลาพักร้อน</option></select>
     <select id="leaveReqType"><option value="ลาป่วย">ลาป่วย</option><option value="ลากิจ">ลากิจ</option><option value="ลาพักร้อน">ลาพักร้อน</option></select>
     <input id="leaveReqReason" placeholder="เหตุผล (ถ้ามี)">
     <button onclick="requestLeave()">ขอลา</button>
@@ -340,20 +341,35 @@ async function saveAvail(){
   availLoaded=new Set(availSet);
   alert('บันทึกวันว่างแล้ว '+availSet.size+' วัน');
 }
+const TH_MONTHS_S=['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+function fmtTh(d){const p=d.split('-');return Number(p[2])+' '+TH_MONTHS_S[Number(p[1])-1]+' '+(Number(p[0])+543);}
+function fmtRange(a,b){if(a===b)return fmtTh(a);const pa=a.split('-'),pb=b.split('-');if(pa[0]===pb[0]&&pa[1]===pb[1])return Number(pa[2])+'–'+fmtTh(b);return fmtTh(a)+' – '+fmtTh(b);}
+function nextDay(d){const x=new Date(d+'T00:00:00Z');x.setUTCDate(x.getUTCDate()+1);return x.toISOString().slice(0,10);}
 async function requestLeave(){
-  const d=document.getElementById('leaveReqDate').value, t=document.getElementById('leaveReqType').value, r=document.getElementById('leaveReqReason').value;
-  try{await api('/api/leave',{method:'POST',token:staffToken,body:JSON.stringify({date:d,type:t,reason:r})});
-    document.getElementById('leaveReqMsg').textContent='✅ ขอลาแล้ว — วันนี้ถูกเอาออกจากวันว่างแล้ว';loadMyLeaves();buildAvailCal();}
+  const f=document.getElementById('leaveReqFrom').value, t2=document.getElementById('leaveReqTo').value||f, t=document.getElementById('leaveReqType').value, r=document.getElementById('leaveReqReason').value;
+  try{const d=await api('/api/leave',{method:'POST',token:staffToken,body:JSON.stringify({date_from:f,date_to:t2,type:t,reason:r})});
+    document.getElementById('leaveReqMsg').textContent='✅ ขอลาแล้ว '+d.added+' วัน — ถูกเอาออกจากวันว่างแล้ว'+(d.skipped?' (มี '+d.skipped+' วันที่ขอลาไปแล้ว ข้ามไป)':'');loadMyLeaves();buildAvailCal();}
   catch(e){document.getElementById('leaveReqMsg').textContent='ขอลาไม่ได้: '+e.message;}
 }
 async function loadMyLeaves(){
   const box=document.getElementById('myLeaves');if(!box||!staffToken)return;
   try{const d=await api('/api/leaves/mine',{token:staffToken});
     const today=new Date().toISOString().slice(0,10);
-    box.innerHTML=d.leaves.length?d.leaves.map(l=>`<div>${l.date} · ${l.type}${l.reason?' — '+l.reason:''} ${l.date>=today?`<button class="ghost" onclick="cancelLeave(${l.id})">ยกเลิกลา</button>`:''}</div>`).join(''):'<p class="muted">ยังไม่มีวันลา</p>';}
-  catch(e){box.innerHTML='';}
+    if(!d.leaves.length){box.innerHTML='<p class="muted">ยังไม่มีวันลา</p>';return;}
+    const rows=[...d.leaves].sort((a,b)=>a.date<b.date?-1:1);
+    const groups=[];
+    for(const l of rows){
+      const g=groups[groups.length-1];
+      if(g&&g.type===l.type&&g.reason===l.reason&&nextDay(g.end)===l.date){g.end=l.date;g.ids.push(l.id);}
+      else groups.push({start:l.date,end:l.date,type:l.type,reason:l.reason,ids:[l.id]});
+    }
+    box.innerHTML=groups.reverse().map(g=>{
+      const n=g.ids.length, label=n>1?fmtRange(g.start,g.end)+' · '+g.type+' ('+n+' วัน)':fmtTh(g.start)+' · '+g.type;
+      return `<div>${label}${g.reason?' — '+g.reason:''} ${g.end>=today?`<button class="ghost" onclick="cancelLeaveRange([${g.ids.join(',')}])">ยกเลิกลา</button>`:''}</div>`;
+    }).join('');
+  }catch(e){box.innerHTML='';}
 }
-async function cancelLeave(id){if(!confirm('ยกเลิกวันลานี้?'))return;await api('/api/leave/'+id,{method:'DELETE',token:staffToken});loadMyLeaves();}
+async function cancelLeaveRange(ids){if(!confirm(ids.length>1?'ยกเลิกวันลาช่วงนี้ทั้งหมด?':'ยกเลิกวันลานี้?'))return;for(const id of ids){try{await api('/api/leave/'+id,{method:'DELETE',token:staffToken});}catch(e){}}loadMyLeaves();}
 async function loadToday(){
   try{const d=await api('/api/today-status',{token:staffToken||ownerToken||adminToken});
     const wd=['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์','เสาร์'][new Date(d.date+'T12:00:00').getDay()];
