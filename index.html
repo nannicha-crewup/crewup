@@ -82,6 +82,16 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{border-bottom:1px
     <p class="muted" data-t="availNote">แตะวันที่ว่าง แล้วกดบันทึก</p>
     <div id="availCal"></div>
     <button onclick="saveAvail()" data-t="save">บันทึกวันว่าง</button>
+    <hr>
+    <h2>ขอลาวัน</h2>
+    <p class="muted">ลาวันไหน วันที่ลาจะถูกเอาออกจากวันว่างให้อัตโนมัติ (ถ้ามีกะวันนั้นอยู่แล้ว เจ้าของจะเห็นว่าต้องหาคนแทน)</p>
+    <input type="date" id="leaveReqDate">
+    <select id="leaveReqType"><option value="ลาป่วย">ลาป่วย</option><option value="ลากิจ">ลากิจ</option><option value="ลาพักร้อน">ลาพักร้อน</option></select>
+    <input id="leaveReqReason" placeholder="เหตุผล (ถ้ามี)">
+    <button onclick="requestLeave()">ขอลา</button>
+    <p id="leaveReqMsg"></p>
+    <h2>วันลาของฉัน</h2>
+    <div id="myLeaves"></div>
   </div>
 
   <div id="tab-today" class="card" style="display:none">
@@ -156,6 +166,10 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{border-bottom:1px
       <p class="muted">เด็กแจ้งลาแล้วจะขึ้นตรงนี้ พร้อมรายชื่อคนที่ว่างและประวัติว่าใครเคยทำร้านนี้มากี่กะ — เธอกดเลือกคนแทนได้เลย แอปไม่มีแจ้งเตือนเด้งเข้ามือถือ เธอต้องเปิดแอปมาดู</p>
       <button class="ghost" onclick="loadCoverRequests()">ดูคำขอหาคนแทน</button>
       <div id="coverReqBox"></div>
+      <h2>วันลาของเด็ก</h2>
+      <p class="muted">เด็กขอลาวันไหนบ้าง — วันที่ขึ้นว่า "ต้องหาคนแทน" คือเด็กคนนั้นมีกะลงไว้วันนั้นแล้ว เธอต้องหาคนมาแทน</p>
+      <button class="ghost" onclick="loadOwnerLeaves()">ดูวันลา</button>
+      <div id="ownerLeavesBox"></div>
       <h2 data-t="adminsTitle">แอดมิน (สูงสุด 3 คน — จัดตารางได้อย่างเดียว ไม่เห็นยอดเงิน)</h2>
       <p class="muted" data-t="adminsNote">แอดมินแต่ละคนมีชื่อและ PIN ของตัวเอง ประวัติการเข้าใช้จะบอกว่าแอดมินคนไหนทำอะไร</p>
       <div id="adminDir"></div>
@@ -237,7 +251,7 @@ function buildTabs(){
   const opts=async()=>{try{const d=await api('/api/owner/staff',{token:ownerToken});return d.staff}catch(e){return[]}};
   window._staffOpts=opts;
 }
-function showTab(k){['clock','hours','avail','today','find','admin','roster','owner'].forEach(x=>document.getElementById('tab-'+x).style.display=x===k?'block':'none');if(k==='today')loadToday();if(k==='avail')buildAvailCal();if(k==='roster')loadBoard();if(k==='hours')loadMyHours();}
+function showTab(k){['clock','hours','avail','today','find','admin','roster','owner'].forEach(x=>document.getElementById('tab-'+x).style.display=x===k?'block':'none');if(k==='today')loadToday();if(k==='avail'){buildAvailCal();loadMyLeaves();}if(k==='roster')loadBoard();if(k==='hours')loadMyHours();}
 async function refreshMe(){
   document.getElementById('meLine').textContent=me?('Logged in as '+me.name):'';
   const cov=document.getElementById('coverSel');cov.innerHTML='<option value="">—</option>';
@@ -326,6 +340,20 @@ async function saveAvail(){
   availLoaded=new Set(availSet);
   alert('บันทึกวันว่างแล้ว '+availSet.size+' วัน');
 }
+async function requestLeave(){
+  const d=document.getElementById('leaveReqDate').value, t=document.getElementById('leaveReqType').value, r=document.getElementById('leaveReqReason').value;
+  try{await api('/api/leave',{method:'POST',token:staffToken,body:JSON.stringify({date:d,type:t,reason:r})});
+    document.getElementById('leaveReqMsg').textContent='✅ ขอลาแล้ว — วันนี้ถูกเอาออกจากวันว่างแล้ว';loadMyLeaves();buildAvailCal();}
+  catch(e){document.getElementById('leaveReqMsg').textContent='ขอลาไม่ได้: '+e.message;}
+}
+async function loadMyLeaves(){
+  const box=document.getElementById('myLeaves');if(!box||!staffToken)return;
+  try{const d=await api('/api/leaves/mine',{token:staffToken});
+    const today=new Date().toISOString().slice(0,10);
+    box.innerHTML=d.leaves.length?d.leaves.map(l=>`<div>${l.date} · ${l.type}${l.reason?' — '+l.reason:''} ${l.date>=today?`<button class="ghost" onclick="cancelLeave(${l.id})">ยกเลิกลา</button>`:''}</div>`).join(''):'<p class="muted">ยังไม่มีวันลา</p>';}
+  catch(e){box.innerHTML='';}
+}
+async function cancelLeave(id){if(!confirm('ยกเลิกวันลานี้?'))return;await api('/api/leave/'+id,{method:'DELETE',token:staffToken});loadMyLeaves();}
 async function loadToday(){
   try{const d=await api('/api/today-status',{token:staffToken||ownerToken||adminToken});
     const wd=['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์','เสาร์'][new Date(d.date+'T12:00:00').getDay()];
@@ -352,6 +380,15 @@ async function loadCoverRequests(){
   }catch(e){box.innerHTML='โหลดคำขอไม่ได้: '+e.message;}
 }
 async function assignCover(reqId,coverId,name){if(!confirm('ให้ '+name+' มาแทนกะนี้?'))return;await api('/api/cover-requests/'+reqId,{method:'POST',token:ownerToken||adminToken,body:JSON.stringify({cover_staff_id:coverId})});alert('เลือก '+name+' มาแทนแล้ว');loadCoverRequests();}
+async function loadOwnerLeaves(){
+  const box=document.getElementById('ownerLeavesBox');if(!box)return;
+  try{
+    const d=await api('/api/owner/leaves',{token:ownerToken});
+    if(!d.leaves.length){box.innerHTML='ไม่มีวันลา';return;}
+    box.innerHTML=d.leaves.map(l=>`<div style="border:1px solid var(--hatch-widget-border);border-radius:8px;padding:10px;margin:8px 0"><b>${l.name}</b> · ${l.date} · ${l.type}${l.reason?' — '+l.reason:''} ${l.scheduled?'<span class="bad"><b>⚠️ ต้องหาคนแทน — มีกะวันนั้น</b></span>':''} <button class="ghost" onclick="delOwnerLeave(${l.id})">ลบ</button></div>`).join('');
+  }catch(e){box.innerHTML='โหลดวันลาไม่ได้: '+e.message;}
+}
+async function delOwnerLeave(id){if(!confirm('ลบวันลานี้?'))return;await api('/api/owner/leaves/'+id,{method:'DELETE',token:ownerToken});loadOwnerLeaves();}
 async function cancelCoverReq(reqId){if(!confirm('ปิดคำขอนี้?'))return;await api('/api/cover-requests/'+reqId,{method:'POST',token:ownerToken||adminToken,body:JSON.stringify({action:'cancel'})});loadCoverRequests();}
 async function findRepl(){
   const d=await api('/api/replacements?date='+document.getElementById('findDate').value+'&shop_id='+document.getElementById('findShop').value,{token:staffToken});
@@ -376,6 +413,7 @@ async function loadOwner(){
   document.getElementById('shopDir').innerHTML=d.shops.map(s=>{const esc=v=>(v||'').replace(/"/g,'&quot;');return `<div style="border-bottom:1px solid var(--hatch-widget-border);padding:8px 0"><input data-shopname="${s.id}" value="${esc(s.name)}" style="width:150px"> เอเจนต์ $<input data-shopagent="${s.id}" type="number" value="${s.agent_rate}" style="width:70px"> เด็ก $<input data-shopworker="${s.id}" type="number" value="${s.worker_rate}" style="width:70px"> <button onclick="saveShop(${s.id})">บันทึก</button> <button class="ghost" onclick="toggleShop(${s.id},${s.active?0:1})">${s.active?'เปิดอยู่':'ปิดอยู่ — กดเปิด'}</button></div>`;}).join('');
   const fill=(id)=>{document.getElementById(id).innerHTML=d.staff.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')};['schStaff','bfStaff','schCover'].forEach(fill);
   loadCoverRequests();
+  loadOwnerLeaves();
 }
 async function addAdmin(){const n=document.getElementById('newAdminName').value,p=document.getElementById('newAdminPin').value;await api('/api/owner/admins',{method:'POST',token:ownerToken,body:JSON.stringify({name:n,pin:p})});loadOwner();}
 async function toggleAdmin(id,active){await api('/api/owner/admins/'+id,{method:'PATCH',token:ownerToken,body:JSON.stringify({active:!!active})});loadOwner();}

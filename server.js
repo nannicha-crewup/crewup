@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, role TEXT, created_a
 CREATE TABLE IF NOT EXISTS clock_records(id INTEGER PRIMARY KEY AUTOINCREMENT, staff_id INTEGER, shop_id INTEGER, date TEXT, clock_in TEXT, clock_out TEXT, hours REAL, is_15x INTEGER DEFAULT 0, covers_for_id INTEGER, taxi_amount REAL DEFAULT 0, taxi_payer TEXT DEFAULT '', taxi_receipt_no TEXT DEFAULT '', taxi_remark TEXT DEFAULT '', riders TEXT DEFAULT '[]', photo_in TEXT DEFAULT '', photo_out TEXT DEFAULT '', receipt_photo TEXT DEFAULT '', source TEXT DEFAULT 'app', created_at TEXT);
 CREATE TABLE IF NOT EXISTS shifts(id INTEGER PRIMARY KEY AUTOINCREMENT, staff_id INTEGER, shop_id INTEGER, date TEXT, time_start TEXT, time_end TEXT, covers_for_id INTEGER, created_by TEXT DEFAULT '', status TEXT DEFAULT 'scheduled');
 CREATE TABLE IF NOT EXISTS availability(staff_id INTEGER, date TEXT, available INTEGER, PRIMARY KEY(staff_id, date));
+CREATE TABLE IF NOT EXISTS leaves(id INTEGER PRIMARY KEY AUTOINCREMENT, staff_id INTEGER, date TEXT, type TEXT, reason TEXT DEFAULT '', created_at TEXT);
 CREATE TABLE IF NOT EXISTS cover_requests(id INTEGER PRIMARY KEY AUTOINCREMENT, staff_id INTEGER, shop_id INTEGER, date TEXT, reason TEXT DEFAULT '', status TEXT DEFAULT 'open', cover_staff_id INTEGER, created_at TEXT);
 CREATE TABLE IF NOT EXISTS pay_status(month TEXT, staff_id INTEGER, paid INTEGER DEFAULT 0, paid_at TEXT, PRIMARY KEY(month, staff_id));
 CREATE TABLE IF NOT EXISTS requirements(shop_id INTEGER, weekday INTEGER, required_count INTEGER, PRIMARY KEY(shop_id, weekday));
@@ -498,6 +499,58 @@ async function handle(req, res) {
       const to = u.searchParams.get('to') || from;
       const rows = db.prepare('SELECT staff_id,date FROM availability WHERE available=1 AND date BETWEEN ? AND ?').all(from, to);
       send(res, 200, { rows: rows.map(r => ({ staff_id: r.staff_id, name: staffName(r.staff_id), date: r.date })) }); return;
+    }
+    // ---- staff leave (วันลา): staff request a day off; that day is removed
+    // from their availability automatically. Owner sees leaves with a
+    // "needs cover" flag when the person is scheduled that day. ----
+    const LEAVE_TYPES = ['ลาป่วย', 'ลากิจ', 'ลาพักร้อน'];
+    if (p === '/api/leave' && req.method === 'POST') {
+      const me = requireStaff(req, res); if (!me) return;
+      const b = await bodyJson(req);
+      const date = String(b.date || '');
+      const type = String(b.type || '');
+      const reason = String(b.reason || '').trim().slice(0, 120);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return send(res, 400, { error: 'date required (YYYY-MM-DD)' });
+      if (!LEAVE_TYPES.includes(type)) return send(res, 400, { error: 'type must be ลาป่วย, ลากิจ or ลาพักร้อน' });
+      const today = new Date().toISOString().slice(0, 10);
+      if (date < today) return send(res, 400, { error: 'ลาวันย้อนหลังไม่ได้ — เลือกวันตั้งแต่วันนี้เป็นต้นไป' });
+      const dup = db.prepare('SELECT id FROM leaves WHERE staff_id=? AND date=?').get(me.id, date);
+      if (dup) return send(res, 400, { error: 'ขอลาวันนี้ไปแล้ว' });
+      const r = db.prepare('INSERT INTO leaves(staff_id,date,type,reason,created_at) VALUES (?,?,?,?,?)').run(me.id, date, type, reason, new Date().toISOString());
+      db.prepare('DELETE FROM availability WHERE staff_id=? AND date=?').run(me.id, date);
+      log(me.name, 'leave_request', me.name + ' ขอลา ' + date + ' (' + type + ')' + (reason ? ' — ' + reason : ''));
+      send(res, 200, { ok: true, id: Number(r.lastInsertRowid) }); return;
+    }
+    if (p === '/api/leaves/mine') {
+      const me = requireStaff(req, res); if (!me) return;
+      const rows = db.prepare('SELECT * FROM leaves WHERE staff_id=? ORDER BY date DESC').all(me.id);
+      send(res, 200, { leaves: rows.map(l => ({ id: l.id, date: l.date, type: l.type, reason: l.reason || '', created_at: l.created_at })) }); return;
+    }
+    if (p.startsWith('/api/leave/') && req.method === 'DELETE') {
+      const me = requireStaff(req, res); if (!me) return;
+      const id = Number(p.split('/')[3]);
+      const lv = db.prepare('SELECT * FROM leaves WHERE id=?').get(id);
+      if (!lv) return send(res, 404, { error: 'leave not found' });
+      if (lv.staff_id !== me.id) return send(res, 403, { error: 'you can only cancel your own leave' });
+      const today = new Date().toISOString().slice(0, 10);
+      if (lv.date < today) return send(res, 400, { error: 'ยกเลิกวันลาย้อนหลังไม่ได้' });
+      db.prepare('DELETE FROM leaves WHERE id=?').run(id);
+      log(me.name, 'leave_cancel', me.name + ' ยกเลิกวันลา ' + lv.date);
+      send(res, 200, { ok: true }); return;
+    }
+    if (p === '/api/owner/leaves') {
+      const role = requireRole(req, res, ['owner']); if (!role) return;
+      const rows = db.prepare('SELECT * FROM leaves ORDER BY date ASC, staff_id').all();
+      send(res, 200, { leaves: rows.map(l => ({ id: l.id, staff_id: l.staff_id, name: staffName(l.staff_id), date: l.date, type: l.type, reason: l.reason || '', created_at: l.created_at, scheduled: !!db.prepare('SELECT 1 FROM shifts WHERE staff_id=? AND date=?').get(l.staff_id, l.date) })) }); return;
+    }
+    if (p.startsWith('/api/owner/leaves/') && req.method === 'DELETE') {
+      const role = requireRole(req, res, ['owner']); if (!role) return;
+      const id = Number(p.split('/')[4]);
+      const lv = db.prepare('SELECT * FROM leaves WHERE id=?').get(id);
+      if (!lv) return send(res, 404, { error: 'leave not found' });
+      db.prepare('DELETE FROM leaves WHERE id=?').run(id);
+      log(role, 'leave_delete', 'leave ' + id + ' (' + staffName(lv.staff_id) + ' ' + lv.date + ') removed by owner');
+      send(res, 200, { ok: true }); return;
     }
     if (p === '/api/schedule') {
       if (!auth(req) && !staffAuth(req)) return send(res, 401, { error: 'login required' });
