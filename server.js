@@ -405,6 +405,17 @@ async function handle(req, res) {
       const transportMode = b.transport_mode || 'taxi';
       let taxiAmt = Number(b.taxi_amount || 0);
       if (transportMode === 'company') taxiAmt = 0;
+      // One car, one total, one payer: the full cab fare is entered once, on the
+      // payer's own record (reimburse = min(total, $20 x heads) to that payer).
+      // Stop the same car being entered a second time by a rider.
+      if (transportMode === 'taxi' && taxiAmt > 0) {
+        const tonight = db.prepare("SELECT * FROM clock_records WHERE shop_id=? AND date=? AND clock_out IS NOT NULL AND taxi_amount>0").all(rec.shop_id, rec.date);
+        const riderIds = riders.map(Number);
+        const paidByOther = tonight.find(r => r.staff_id !== rec.staff_id && JSON.parse(r.riders || '[]').map(Number).includes(rec.staff_id));
+        if (paidByOther) return send(res, 400, { error: staffName(paidByOther.staff_id) + ' ลงค่าแท็กซี่คืนนี้ไว้แล้ว ($' + paidByOther.taxi_amount + ' ทั้งคัน) — เธอนั่งมาด้วยกัน ใส่ 0 ได้เลย' });
+        const riderPaid = tonight.find(r => r.staff_id !== rec.staff_id && riderIds.includes(r.staff_id));
+        if (riderPaid) return send(res, 400, { error: staffName(riderPaid.staff_id) + ' ลงค่าแท็กซี่คืนนี้ไว้แล้ว ($' + riderPaid.taxi_amount + ') — ค่ารถคันเดียวกันลงได้แค่คนจ่ายคนเดียว ให้เจ้าของช่วยเช็ก' });
+      }
       const warnings = [];
       if (transportMode === 'company' && !b.company_transport_at) warnings.push('company transport used — record departure time');
       if (transportMode === 'taxi' && taxiAmt > 0) {
@@ -427,6 +438,17 @@ async function handle(req, res) {
       const today = new Date().toISOString().slice(0, 10);
       const shifts = db.prepare('SELECT * FROM shifts WHERE staff_id=? AND date=?').all(sid, today);
       send(res, 200, { open: open ? { id: open.id, shop_id: open.shop_id, shop: shopName(open.shop_id), clock_in: open.clock_in } : null, shifts: shifts.map(s => ({ ...s, shop: shopName(s.shop_id), covers_for: s.covers_for_id ? staffName(s.covers_for_id) : null })) }); return;
+    }
+    if (p === '/api/owner/agent-hours') {
+      // Owner viewing her OWN hours: the owner is Nicha, the staff member flagged
+      // direct_company. Same shape as /api/my-hours, owner token only.
+      const role = requireRole(req, res, ['owner']); if (!role) return;
+      const month = u.searchParams.get('month') || new Date().toISOString().slice(0, 7);
+      const agent = db.prepare('SELECT * FROM staff WHERE direct_company=1 AND active=1').get();
+      if (!agent) return send(res, 200, { month, staff: null, total_hours: 0, taxi_total: 0, records: [] });
+      const { from, to } = monthRange(month);
+      const recs = db.prepare('SELECT * FROM clock_records WHERE staff_id=? AND date BETWEEN ? AND ? ORDER BY date').all(agent.id, from, to);
+      send(res, 200, { month, staff: agent.name, total_hours: +recs.reduce((a, r) => a + (r.hours || 0), 0).toFixed(2), taxi_total: +recs.reduce((a, r) => a + (r.taxi_amount || 0), 0).toFixed(2), records: recs.map(r => ({ id: r.id, date: r.date, shop: shopName(r.shop_id), clock_in: r.clock_in, clock_out: r.clock_out, hours: r.hours, is_15x: !!r.is_15x, covers_for: r.covers_for_id ? staffName(r.covers_for_id) : null, taxi_amount: r.taxi_amount, taxi_payer: r.taxi_payer, transport_mode: r.transport_mode || 'taxi', taxi_warning: r.taxi_warning || '' })) }); return;
     }
     if (p === '/api/my-hours') {
       const me = requireStaff(req, res); if (!me) return;
