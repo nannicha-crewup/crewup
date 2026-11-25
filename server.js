@@ -903,6 +903,17 @@ async function handle(req, res) {
       log(role, 'edit_clock', staffName(r0.staff_id) + ' ' + shopName(r0.shop_id) + ' ' + r0.date + ' ' + fmt(r0.clock_in) + '-' + fmt(r0.clock_out) + ' → ' + fmt(inISO) + '-' + fmt(outISO) + ' (' + reason + ')');
       send(res, 200, { ok: true, hours: hrs }); return;
     }
+    if (p.startsWith('/api/clock-record/') && req.method === 'DELETE') {
+      // Owner only: delete one clock record (e.g. a 0-hour duplicate from an
+      // accidental clock-in). Logged so the deletion is traceable.
+      const role = requireRole(req, res, ['owner']); if (!role) return;
+      const id = Number(p.split('/')[3]);
+      const r0 = db.prepare('SELECT * FROM clock_records WHERE id=?').get(id);
+      if (!r0) return send(res, 404, { error: 'record not found' });
+      db.prepare('DELETE FROM clock_records WHERE id=?').run(id);
+      log(role, 'delete_clock', staffName(r0.staff_id) + ' ' + shopName(r0.shop_id) + ' ' + r0.date + ' ' + (r0.hours || 0) + 'h, taxi $' + (r0.taxi_amount || 0) + ' deleted');
+      send(res, 200, { ok: true }); return;
+    }
     if (p === '/api/requirement' && req.method === 'POST') {
       const role = requireRole(req, res, ['owner', 'admin']); if (!role) return;
       const b = await bodyJson(req);
@@ -973,7 +984,19 @@ async function handle(req, res) {
     if (p.startsWith('/api/staff/') && req.method === 'PATCH') {
       const role = requireRole(req, res, ['owner']); if (!role) return;
       const b = await bodyJson(req); const id = Number(p.split('/')[3]);
-      if (b.name) db.prepare('UPDATE staff SET name=? WHERE id=?').run(b.name.trim(), id);
+      if (b.name) {
+        // Rename: names must stay unique (case-insensitive) because staff log
+        // in by name. Taxi payer is stored as a name, so rename it too —
+        // otherwise old taxi reimbursements would stop crediting this person.
+        const newName = b.name.trim();
+        if (!newName) return send(res, 400, { error: 'name required' });
+        const clash = db.prepare('SELECT id FROM staff WHERE lower(name)=? AND id<>?').get(newName.toLowerCase(), id);
+        if (clash) return send(res, 400, { error: 'มีชื่อนี้อยู่แล้ว — ชื่อพนักงานซ้ำกันไม่ได้' });
+        const cur = db.prepare('SELECT name FROM staff WHERE id=?').get(id);
+        if (cur) db.prepare('UPDATE clock_records SET taxi_payer=? WHERE taxi_payer=?').run(newName, cur.name);
+        db.prepare('UPDATE staff SET name=? WHERE id=?').run(newName, id);
+        if (cur) log('owner', 'staff_rename', cur.name + ' → ' + newName);
+      }
       if (b.phone !== undefined) db.prepare('UPDATE staff SET phone=? WHERE id=?').run(String(b.phone || '').trim(), id);
       if (b.paynow !== undefined) db.prepare('UPDATE staff SET paynow=? WHERE id=?').run(String(b.paynow || '').trim(), id);
       if (b.payname !== undefined) db.prepare('UPDATE staff SET payname=? WHERE id=?').run(String(b.payname || '').trim(), id);
