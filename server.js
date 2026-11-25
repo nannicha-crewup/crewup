@@ -8,6 +8,9 @@ const { spawn } = require('child_process');
 const { DatabaseSync } = require('node:sqlite');
 
 const PORT = process.env.PORT || 3000;
+// Billable hours round to the nearest ROUND_MINUTES (15 min = 0.25h).
+// Set to 30 to round per half hour instead.
+const ROUND_MINUTES = 15;
 const DIR = __dirname;
 const DB_PATH = process.env.DB_PATH || path.join(DIR, 'crewup.db');
 const db = new DatabaseSync(DB_PATH);
@@ -228,13 +231,22 @@ function clampedHours(inISO, outISO, shopId, date, staffId) {
   // Hours counted = time actually inside the scheduled shift window.
   // Clocking in early or out late no longer inflates a 4h shift; clocking
   // in late still prorates (e.g. 23:40 in -> 3.33h).
+  // Billable hours are rounded to the nearest ROUND_MINUTES (15 min = 0.25h)
+  // so the numbers stay clean for the shop bills (4, 4.25, 3.75...) instead
+  // of odd decimals like 3.94. E.g. in 22:55, out 02:58 -> 3.97h -> 4h.
+  // 15 min is fairer than 30 min (max error 7.5 min, not 15) and still
+  // keeps a small late penalty: 10 min late (3.83h) rounds to 3.75h, while
+  // 30-min rounding would erase it to a full 4h. Change ROUND_MINUTES to 30
+  // to round per half hour instead.
   const w = shiftWindow(shopId, date, staffId);
   const ws = new Date(date + 'T' + w.start + ':00+08:00').getTime();
   let we = new Date(date + 'T' + w.end + ':00+08:00').getTime();
   if (we <= ws) we += 24 * 3600e3;
   const a = Math.max(new Date(inISO).getTime(), ws);
   const b = Math.min(new Date(outISO).getTime(), we);
-  return b > a ? +((b - a) / 3600000).toFixed(2) : 0;
+  if (b <= a) return 0;
+  const step = ROUND_MINUTES / 60;
+  return +(Math.round(((b - a) / 3600000) / step) * step).toFixed(2);
 }
 function shopName(id) { const s = db.prepare('SELECT name FROM shops WHERE id=?').get(id); return s ? s.name : ''; }
 function staffName(id) { const s = db.prepare('SELECT name FROM staff WHERE id=?').get(id); return s ? s.name : ''; }

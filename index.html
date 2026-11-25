@@ -283,8 +283,8 @@ async function refreshMe(){
   const st=await api('/api/my-status?staff_id='+me.staff_id,{token:staffToken}).catch(()=>null);
   const todayUTC=new Date().toISOString().slice(0,10);
   const lc=(st&&st.last_closed&&st.last_closed.date===todayUTC)?st.last_closed:null;
-  if(st&&st.open){document.getElementById('openShift').textContent='⏱ Clocked in at '+st.open.shop+' since '+new Date(st.open.clock_in).toLocaleTimeString();document.getElementById('clockOutBox').style.display='block';document.getElementById('outStep').style.display='block';document.getElementById('taxiStep').style.display='none';window._openId=st.open.id;}
-  else if(lc){document.getElementById('openShift').textContent='✅ ตอกบัตรออกแล้ว '+new Date(lc.clock_out).toLocaleTimeString()+' ('+lc.hours+' ชม.) — ใส่ค่าแท็กซี่คืนนี้ได้ข้างล่าง';if(window._taxiSkipped!==lc.id){document.getElementById('clockOutBox').style.display='block';document.getElementById('outStep').style.display='none';document.getElementById('taxiStep').style.display='block';window._taxiRecordId=lc.id;}else{document.getElementById('clockOutBox').style.display='none';}}
+  if(st&&st.open){document.getElementById('openShift').textContent='⏱ Clocked in at '+st.open.shop+' since '+sgtHM(st.open.clock_in);document.getElementById('clockOutBox').style.display='block';document.getElementById('outStep').style.display='block';document.getElementById('taxiStep').style.display='none';window._openId=st.open.id;}
+  else if(lc){document.getElementById('openShift').textContent='✅ ตอกบัตรออกแล้ว '+sgtHM(lc.clock_out)+' ('+lc.hours+' ชม.) — ใส่ค่าแท็กซี่คืนนี้ได้ข้างล่าง';if(window._taxiSkipped!==lc.id){document.getElementById('clockOutBox').style.display='block';document.getElementById('outStep').style.display='none';document.getElementById('taxiStep').style.display='block';window._taxiRecordId=lc.id;}else{document.getElementById('clockOutBox').style.display='none';}}
   else{document.getElementById('openShift').textContent='Not clocked in.';document.getElementById('clockOutBox').style.display='none';}
   const sl=await api('/api/staff-list',{token:staffToken}).catch(()=>null);
   window._staffList=sl?sl.staff:[];
