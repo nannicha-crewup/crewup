@@ -173,6 +173,7 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{border-bottom:1px
       <div class="row"><select id="editStaff"></select><input type="month" id="editMonth"></div>
       <button class="ghost" onclick="loadEditRecords()">ดูรายการตอกบัตร</button>
       <div id="editBox"></div>
+      <div id="photoBox" style="display:none"></div>
       <h2 data-t="bills">บิลส่งบริษัท / ส่งร้าน</h2>
       <select id="billStaff"></select><select id="billShop"></select>
       <button onclick="dlBill('direct')" data-t="dlDirect">โหลดบิล Nicha (Date/Timing/Hr/1.5/Total)</button>
@@ -234,6 +235,24 @@ en:{loginTitle:'Staff login',loginNote:'Enter your registered name, mobile numbe
 function setLang(l){LANG=l;document.querySelectorAll('[data-t]').forEach(e=>{const k=e.dataset.t;if(T[l][k])e.textContent=T[l][k]});}
 async function api(path,opts={}){const r=await fetch(path,{...opts,headers:{'Content-Type':'application/json',...(opts.token?{Authorization:'Bearer '+opts.token}:{}),...(opts.headers||{})}});const t=await r.text();let j;try{j=JSON.parse(t)}catch(e){j={raw:t}}if(!r.ok)throw new Error(j.error||('HTTP '+r.status));return j;}
 function fileData(id){return new Promise(res=>{const f=document.getElementById(id).files[0];if(!f)return res('');const rd=new FileReader();rd.onerror=()=>res('');rd.onload=()=>{const img=new Image();img.onerror=()=>res('');img.onload=()=>{const c=document.createElement('canvas');const s=Math.min(1,900/Math.max(img.width,img.height));c.width=img.width*s;c.height=img.height*s;c.getContext('2d').drawImage(img,0,0,c.width,c.height);res(c.toDataURL('image/jpeg',0.65))};img.src=rd.result};rd.readAsDataURL(f)})}
+function getLoc(){
+  // GPS for the clock-in/out fraud check (owner sees where each clock-in
+  // happened). Never blocks clocking in/out: on deny/timeout/failure it
+  // resolves with a status and the shift still saves — the owner sees the
+  // missing-location warning instead.
+  return new Promise(res=>{
+    if(!navigator.geolocation) return res({status:'unavailable'});
+    let done=false;
+    const to=setTimeout(()=>{if(!done){done=true;res({status:'timeout'});}},8000);
+    navigator.geolocation.getCurrentPosition(p=>{
+      if(done)return; done=true; clearTimeout(to);
+      res({status:'ok', lat:+p.coords.latitude.toFixed(6), lng:+p.coords.longitude.toFixed(6), acc:Math.round(p.coords.accuracy||0)});
+    }, e=>{
+      if(done)return; done=true; clearTimeout(to);
+      res({status:(e&&e.code===1)?'denied':'unavailable'});
+    }, {enableHighAccuracy:true, timeout:8000, maximumAge:60000});
+  });
+}
 async function loadDir(){const d=await api('/api/directory');shops=d.shops;const fill=(id)=>{const el=document.getElementById(id);el.innerHTML=shops.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')};['shopSel','findShop','schShop','bfShop','billShop','leaveShop','bdShop'].forEach(fill);}
 async function staffLogin(){
   const name=document.getElementById('loginName').value.trim(), phone=document.getElementById('loginPhone').value.trim();
@@ -325,16 +344,18 @@ function updateTaxiHint(){
 function hideTaxiStep(){window._taxiSkipped=window._taxiRecordId;document.getElementById('taxiStep').style.display='none';}
 function pickPayer(el){taxiPayerSel=el.dataset.v;document.querySelectorAll('#taxiPayerPills button').forEach(b=>{b.style.background='#fff';b.style.color='#222';});el.style.background='#0d7a5f';el.style.color='#fff';}
 async function clockIn(){
-  const photo=await fileData('photoIn');
+  document.getElementById('clockMsg').textContent='กำลังจับโลเคชั่น…';
+  const [photo, loc]=await Promise.all([fileData('photoIn'), getLoc()]);
   const ids=[me.staff_id];if(isGroupMode){groupSel.forEach(id=>ids.push(id));}
-  try{const d=await api('/api/clock-in',{method:'POST',token:staffToken,body:JSON.stringify({staff_ids:ids,shop_id:Number(document.getElementById('shopSel').value),covers_for_id:Number(document.getElementById('coverSel').value)||null,photo})});
+  try{const d=await api('/api/clock-in',{method:'POST',token:staffToken,body:JSON.stringify({staff_ids:ids,shop_id:Number(document.getElementById('shopSel').value),covers_for_id:Number(document.getElementById('coverSel').value)||null,photo,loc})});
     const nm=id=>{const s=(window._staffList||[]).find(x=>x.id===id);return s?s.name:'';};
     document.getElementById('clockMsg').textContent=d.results.map(r=>r.error?('❌ '+nm(r.staff_id)+' '+(r.error==='already clocked in'?'ตอกบัตรเข้าไว้แล้ว':r.error)):('✅ '+nm(r.staff_id)+' ตอกบัตรเข้าแล้ว')).join(' ');
     groupSel.clear();refreshMe();}catch(e){document.getElementById('clockMsg').textContent='❌ '+e.message;}
 }
 async function doClockOutSimple(){
-  const photo=await fileData('photoOut');
-  try{const d=await api('/api/clock-out',{method:'POST',token:staffToken,body:JSON.stringify({record_id:window._openId,photo,simple:true})});
+  document.getElementById('clockMsg').textContent='กำลังจับโลเคชั่น…';
+  const [photo, loc]=await Promise.all([fileData('photoOut'), getLoc()]);
+  try{const d=await api('/api/clock-out',{method:'POST',token:staffToken,body:JSON.stringify({record_id:window._openId,photo,simple:true,loc})});
     document.getElementById('clockMsg').textContent='✅ ตอกบัตรออกแล้ว '+d.hours+' ชม.'+(d.warnings&&d.warnings.length?' ⚠️ '+d.warnings.join('; '):'');
     window._openId=null;refreshMe();}catch(e){document.getElementById('clockMsg').textContent='❌ '+e.message;}
 }
@@ -517,13 +538,45 @@ async function backfill(){await api('/api/backfill',{method:'POST',token:adminTo
 async function loadEditRecords(){
   const sid=document.getElementById('editStaff').value,m=document.getElementById('editMonth').value||new Date().toISOString().slice(0,7);
   try{const d=await api('/api/owner/records?staff_id='+sid+'&month='+m,{token:ownerToken});
-    document.getElementById('editBox').innerHTML=d.records.map(r=>`<div style="border-bottom:1px solid #eee;padding:8px 0">${r.date} · ${r.shop} · ${sgtHM(r.clock_in)}–${sgtHM(r.clock_out)} · ${r.hours==null?'':r.hours+' ชม.'}${r.source==='backfill'?' (ลงย้อนหลัง)':''}${r.edit_note?'<br><span class="muted">แก้ไขแล้ว: '+r.edit_note+'</span>':''}<br>เข้า <input type="time" id="editIn-${r.id}" value="${sgtHM(r.clock_in)}" style="width:110px"> ออก <input type="time" id="editOut-${r.id}" value="${sgtHM(r.clock_out)}" style="width:110px"> เหตุผล <input id="editReason-${r.id}" placeholder="เช่น ลืมตอกบัตรตอนมาถึง" style="width:170px"> <button onclick="saveEditTime(${r.id})">บันทึกเวลา</button></div>`).join('')||'ไม่มีรายการเดือนนี้';
+    document.getElementById('editBox').innerHTML=d.records.map(r=>`<div style="border-bottom:1px solid #eee;padding:8px 0">${r.date} · ${r.shop} · ${sgtHM(r.clock_in)}–${sgtHM(r.clock_out)} · ${r.hours==null?'':r.hours+' ชม.'}${r.source==='backfill'?' (ลงย้อนหลัง)':''}${r.edit_note?'<br><span class="muted">แก้ไขแล้ว: '+r.edit_note+'</span>':''}${locLine(r.loc_in,'เข้า')}${locLine(r.loc_out,'ออก')}<br>เข้า <input type="time" id="editIn-${r.id}" value="${sgtHM(r.clock_in)}" style="width:110px"> ออก <input type="time" id="editOut-${r.id}" value="${sgtHM(r.clock_out)}" style="width:110px"> เหตุผล <input id="editReason-${r.id}" placeholder="เช่น ลืมตอกบัตรตอนมาถึง" style="width:170px"> <button onclick="saveEditTime(${r.id})">บันทึกเวลา</button>${(r.has_photo_in||r.has_photo_out||r.has_receipt_photo)?' <button class="ghost" onclick="showRecordPhotos('+r.id+','+(r.has_photo_in?1:0)+','+(r.has_photo_out?1:0)+','+(r.has_receipt_photo?1:0)+')">📷 ดูรูป</button>':''}</div>`).join('')||'ไม่มีรายการเดือนนี้';
   }catch(e){document.getElementById('editBox').innerHTML='<p>ดูไม่ได้: '+e.message+'</p>';}
 }
 async function saveEditTime(id){
   const ci=document.getElementById('editIn-'+id).value,co=document.getElementById('editOut-'+id).value,rs=document.getElementById('editReason-'+id).value.trim();
   if(!rs){alert('ใส่เหตุผลที่แก้ไขด้วยค่ะ');return;}
   try{const d=await api('/api/clock-record/edit',{method:'POST',token:ownerToken,body:JSON.stringify({record_id:id,clock_in:ci,clock_out:co,reason:rs})});alert('แก้เวลาแล้ว: '+d.hours+' ชม.');loadEditRecords();}catch(e){alert('แก้ไม่ได้: '+e.message);}
+}
+function locLine(loc, label){
+  // Owner evidence line for one clock event: distance from the shop + a
+  // map link, or a warning when no location was captured.
+  if(!loc) return '';
+  if(loc.status!=='ok'){
+    const why = loc.status==='denied' ? 'เด็กไม่อนุญาตโลเคชั่น' : loc.status==='timeout' ? 'จับโลเคชั่นไม่ทัน' : loc.status==='unavailable' ? 'มือถือจับโลเคชั่นไม่ได้' : 'ไม่มีโลเคชั่น';
+    return '<br><span>📍 '+label+': '+why+' ⚠️</span>';
+  }
+  const far = loc.far ? ' ⚠️ ไกลจากร้าน' : '';
+  const dist = loc.dist_m!=null ? loc.dist_m+' ม.' : 'ไม่ทราบระยะ';
+  return '<br><span>📍 '+label+': ห่างจากร้าน '+dist+far+' (<a href="https://maps.google.com/?q='+loc.lat+','+loc.lng+'" target="_blank" rel="noopener">ดูแผนที่</a>)</span>';
+}
+async function showRecordPhotos(id, hasIn, hasOut, hasRec){
+  // Owner only: show the stored photos for one shift — clock-in, clock-out
+  // and taxi receipt. Photos load one at a time from /api/owner/record-photo.
+  const box=document.getElementById('photoBox');
+  const items=[];
+  if(hasIn)items.push(['in','รูปตอนเข้า']);
+  if(hasOut)items.push(['out','รูปตอนออก']);
+  if(hasRec)items.push(['receipt','รูปบิลแท็กซี่']);
+  if(!items.length){box.innerHTML='<p class="muted">กะนี้ไม่มีรูป</p>';box.style.display='block';return;}
+  box.innerHTML='<p><b>รูปกะนี้</b> <button class="ghost" onclick="document.getElementById(\'photoBox\').style.display=\'none\'">ปิด</button></p>'+items.map(([w,label])=>'<div style="margin:8px 0"><div class="muted" id="phl-'+id+'-'+w+'">'+label+' — กำลังโหลด…</div><img id="ph-'+id+'-'+w+'" style="max-width:100%;border-radius:8px" alt="'+label+'"></div>').join('');
+  box.style.display='block';
+  box.scrollIntoView();
+  for(const [w,label] of items){
+    const lab=document.getElementById('phl-'+id+'-'+w), img=document.getElementById('ph-'+id+'-'+w);
+    try{const d=await api('/api/owner/record-photo?id='+id+'&which='+w,{token:ownerToken});
+      if(d.photo){img.src=d.photo; if(lab)lab.textContent=label;}
+      else{if(lab)lab.textContent=label+' — ไม่มีรูป'; if(img)img.remove();}
+    }catch(e){if(lab)lab.textContent=label+' — โหลดรูปไม่ได้'; if(img)img.remove();}
+  }
 }
 async function loadAlerts(){const d=await api('/api/alerts?from='+new Date().toISOString().slice(0,10)+'&to='+new Date(Date.now()+7*864e5).toISOString().slice(0,10),{token:adminToken||ownerToken});document.getElementById('alertBox').innerHTML=d.alerts.map(a=>`${a.date} ${a.shop}: need ${a.required}, scheduled ${a.scheduled} — short ${a.short_by}`).join('<br>')||'No shortages';}
 let bdSel=null, bdData=null;

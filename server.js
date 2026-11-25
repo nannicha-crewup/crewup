@@ -69,6 +69,16 @@ try { db.exec("ALTER TABLE sessions ADD COLUMN staff_id INTEGER"); } catch (e) {
 try { db.exec("ALTER TABLE sessions ADD COLUMN admin_id INTEGER"); } catch (e) {}
 try { db.exec("ALTER TABLE otp_codes ADD COLUMN code TEXT DEFAULT ''"); } catch (e) {}
 try { db.exec("ALTER TABLE clock_records ADD COLUMN transport_mode TEXT DEFAULT 'taxi'"); } catch (e) {}
+// GPS captured at clock-in/out (fraud check): lat/lng/accuracy + status
+// ('ok' | 'denied' | 'unavailable' | 'timeout' | '' when the old app did not send one).
+try { db.exec("ALTER TABLE clock_records ADD COLUMN loc_in_lat REAL"); } catch (e) {}
+try { db.exec("ALTER TABLE clock_records ADD COLUMN loc_in_lng REAL"); } catch (e) {}
+try { db.exec("ALTER TABLE clock_records ADD COLUMN loc_in_acc REAL"); } catch (e) {}
+try { db.exec("ALTER TABLE clock_records ADD COLUMN loc_in_status TEXT DEFAULT ''"); } catch (e) {}
+try { db.exec("ALTER TABLE clock_records ADD COLUMN loc_out_lat REAL"); } catch (e) {}
+try { db.exec("ALTER TABLE clock_records ADD COLUMN loc_out_lng REAL"); } catch (e) {}
+try { db.exec("ALTER TABLE clock_records ADD COLUMN loc_out_acc REAL"); } catch (e) {}
+try { db.exec("ALTER TABLE clock_records ADD COLUMN loc_out_status TEXT DEFAULT ''"); } catch (e) {}
 try { db.exec("ALTER TABLE clock_records ADD COLUMN company_transport_at TEXT DEFAULT ''"); } catch (e) {}
 try { db.exec("ALTER TABLE clock_records ADD COLUMN taxi_warning TEXT DEFAULT ''"); } catch (e) {}
 try { db.exec("ALTER TABLE clock_records ADD COLUMN edit_note TEXT DEFAULT ''"); } catch (e) {}
@@ -226,6 +236,38 @@ function shiftWindow(shopId, date, staffId) {
     if (s && s.time_start && s.time_end) return { start: s.time_start, end: s.time_end };
   }
   return { start, end };
+}
+// Shop locations for the clock-in/out fraud check: GPS captured at clock-in
+// and clock-out is compared against the shop. Only Bae's has verified
+// coordinates (21 Tanjong Pagar Rd, geocoded 2026-11-26); add Milli and
+// Bungalow here when their addresses are confirmed.
+// Clock-ins farther than SHOP_RADIUS_M from the shop are flagged for the owner.
+const SHOP_COORDS = { "Bae's": [1.27948, 103.84412] };
+const SHOP_RADIUS_M = 300;
+function distM(lat1, lng1, lat2, lng2) {
+  const R = 6371000, toRad = d => d * Math.PI / 180;
+  const a = Math.sin(toRad(lat2 - lat1) / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(toRad(lng2 - lng1) / 2) ** 2;
+  return Math.round(2 * R * Math.asin(Math.sqrt(a)));
+}
+function parseLoc(v) {
+  // GPS from the phone: {lat, lng, acc} plus a status when unavailable.
+  // Invalid values are dropped, never stored; a location is only 'ok' when
+  // its coordinates are valid, otherwise the reason is kept ('denied' /
+  // 'unavailable' / 'timeout' / 'missing').
+  if (!v || typeof v !== 'object') return { lat: null, lng: null, acc: null, status: '' };
+  const lat = Number(v.lat), lng = Number(v.lng), acc = Number(v.acc);
+  const ok = Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+  const status = typeof v.status === 'string' ? v.status.slice(0, 20) : '';
+  if (!ok) return { lat: null, lng: null, acc: null, status: ['denied', 'unavailable', 'timeout'].includes(status) ? status : 'missing' };
+  return { lat, lng, acc: Number.isFinite(acc) && acc >= 0 ? Math.round(acc) : null, status: 'ok' };
+}
+function locInfo(r, which) {
+  const lat = r['loc_' + which + '_lat'], lng = r['loc_' + which + '_lng'];
+  if (lat == null || lng == null) return { status: r['loc_' + which + '_status'] || 'missing' };
+  const out = { status: 'ok', lat, lng, acc: r['loc_' + which + '_acc'] || null };
+  const c = SHOP_COORDS[shopName(r.shop_id)];
+  if (c) { out.dist_m = distM(lat, lng, c[0], c[1]); out.far = out.dist_m > SHOP_RADIUS_M; }
+  return out;
 }
 function clampedHours(inISO, outISO, shopId, date, staffId) {
   // Hours counted = time actually inside the scheduled shift window.
@@ -459,14 +501,15 @@ async function handle(req, res) {
       const shop = db.prepare('SELECT * FROM shops WHERE id=? AND active=1').get(b.shop_id);
       if (!shop) return send(res, 400, { error: 'shop not found' });
       const now = new Date(); const date = now.toISOString().slice(0, 10);
+      const locIn = parseLoc(b.loc);
       const out = [];
       for (const sid of ids) {
         const st = db.prepare('SELECT * FROM staff WHERE id=?').get(sid);
         if (!st || !st.active) { out.push({ staff_id: sid, error: 'staff deactivated — cannot clock in' }); continue; }
         const open = db.prepare('SELECT * FROM clock_records WHERE staff_id=? AND clock_out IS NULL').get(sid);
         if (open) { out.push({ staff_id: sid, error: 'already clocked in', record_id: open.id }); continue; }
-        const r = db.prepare('INSERT INTO clock_records(staff_id,shop_id,date,clock_in,is_15x,covers_for_id,photo_in,source,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-          .run(sid, b.shop_id, date, now.toISOString(), is15x(date) ? 1 : 0, b.covers_for_id || null, (b.photo || '').slice(0, 500000), ids.length > 1 ? 'group' : 'app', now.toISOString());
+        const r = db.prepare('INSERT INTO clock_records(staff_id,shop_id,date,clock_in,is_15x,covers_for_id,photo_in,source,created_at,loc_in_lat,loc_in_lng,loc_in_acc,loc_in_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
+          .run(sid, b.shop_id, date, now.toISOString(), is15x(date) ? 1 : 0, b.covers_for_id || null, (b.photo || '').slice(0, 500000), ids.length > 1 ? 'group' : 'app', now.toISOString(), locIn.lat, locIn.lng, locIn.acc, locIn.status);
         log(st.name, 'clock_in', shopName(b.shop_id) + ' ' + date + (b.covers_for_id ? ' covers ' + staffName(b.covers_for_id) : ''));
         out.push({ staff_id: sid, record_id: Number(r.lastInsertRowid) });
       }
@@ -483,6 +526,7 @@ async function handle(req, res) {
       if (!st || !st.active) return send(res, 403, { error: 'staff deactivated' });
       const now = new Date();
       const hrs = clampedHours(rec.clock_in, now.toISOString(), rec.shop_id, rec.date, rec.staff_id);
+      const locOut = parseLoc(b.loc);
       // Clock-out must never fail because of taxi: the taxi is saved
       // separately (see /api/clock-record/taxi), so a duplicate-car problem
       // only drops the taxi amount here and warns — the out-time is recorded.
@@ -512,8 +556,8 @@ async function handle(req, res) {
         if (per_head > cap) warnings.push(`แท็กซี่ $${per_head}/คน เกินเพดาน $${cap}/คน (${heads} คน) — เบิกได้สูงสุด $${cap * heads}`);
         if (!b.taxi_receipt_no && !b.receipt_photo) warnings.push('ต้องมีใบเสร็จถึงจะเบิกค่าแท็กซี่ได้');
       }
-      db.prepare('UPDATE clock_records SET clock_out=?, hours=?, taxi_amount=?, taxi_payer=?, taxi_receipt_no=?, taxi_remark=?, riders=?, photo_out=?, receipt_photo=?, transport_mode=?, company_transport_at=?, taxi_warning=? WHERE id=?')
-        .run(now.toISOString(), hrs, taxiAmt, b.taxi_payer || '', b.taxi_receipt_no || '', b.taxi_remark || '', JSON.stringify(riders), (b.photo || '').slice(0, 500000), (b.receipt_photo || '').slice(0, 500000), transportMode, b.company_transport_at || '', warnings.join('; '), b.record_id);
+      db.prepare('UPDATE clock_records SET clock_out=?, hours=?, taxi_amount=?, taxi_payer=?, taxi_receipt_no=?, taxi_remark=?, riders=?, photo_out=?, receipt_photo=?, transport_mode=?, company_transport_at=?, taxi_warning=?, loc_out_lat=?, loc_out_lng=?, loc_out_acc=?, loc_out_status=? WHERE id=?')
+        .run(now.toISOString(), hrs, taxiAmt, b.taxi_payer || '', b.taxi_receipt_no || '', b.taxi_remark || '', JSON.stringify(riders), (b.photo || '').slice(0, 500000), (b.receipt_photo || '').slice(0, 500000), transportMode, b.company_transport_at || '', warnings.join('; '), locOut.lat, locOut.lng, locOut.acc, locOut.status, b.record_id);
       log(st.name, 'clock_out', shopName(rec.shop_id) + ' ' + rec.date + ' ' + hrs + 'h taxi $' + taxiAmt + (transportMode === 'company' ? ' (company transport)' : '') + (warnings.length ? ' WARNING: ' + warnings.join('; ') : ''));
       send(res, 200, { ok: true, hours: hrs, warnings }); return;
     }
@@ -1054,7 +1098,19 @@ async function handle(req, res) {
       if (!staffId) return send(res, 400, { error: 'staff_id required' });
       const { from, to } = monthRange(month);
       const recs = db.prepare('SELECT * FROM clock_records WHERE staff_id=? AND date BETWEEN ? AND ? ORDER BY date').all(staffId, from, to);
-      send(res, 200, { month, staff: staffName(staffId), records: recs.map(r => ({ id: r.id, date: r.date, shop: shopName(r.shop_id), clock_in: r.clock_in, clock_out: r.clock_out, hours: r.hours, source: r.source, edit_note: r.edit_note || '' })) }); return;
+      send(res, 200, { month, staff: staffName(staffId), records: recs.map(r => ({ id: r.id, date: r.date, shop: shopName(r.shop_id), clock_in: r.clock_in, clock_out: r.clock_out, hours: r.hours, source: r.source, edit_note: r.edit_note || '', has_photo_in: !!r.photo_in, has_photo_out: !!r.photo_out, has_receipt_photo: !!r.receipt_photo, loc_in: locInfo(r, 'in'), loc_out: locInfo(r, 'out') })) }); return;
+    }
+    if (p === '/api/owner/record-photo') {
+      // Owner only: fetch one stored photo for a record — clock-in, clock-out
+      // or taxi receipt. Photos are returned one at a time so the records
+      // list stays light (each photo is a compressed data URL).
+      const role = requireRole(req, res, ['owner']); if (!role) return;
+      const id = Number(u.searchParams.get('id'));
+      const which = u.searchParams.get('which') || 'in';
+      const r = db.prepare('SELECT photo_in, photo_out, receipt_photo FROM clock_records WHERE id=?').get(id);
+      if (!r) return send(res, 404, { error: 'record not found' });
+      const photo = which === 'out' ? r.photo_out : which === 'receipt' ? r.receipt_photo : r.photo_in;
+      send(res, 200, { photo: photo || '' }); return;
     }
     if (p === '/api/owner/summary') {
       const role = requireRole(req, res, ['owner']); if (!role) return;
