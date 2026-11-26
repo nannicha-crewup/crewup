@@ -126,7 +126,7 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{border-bottom:1px
 
   <div id="tab-admin" class="card" style="display:none">
     <h2 data-t="adminTitle">แอดมิน — จัดตาราง (ไม่เห็นยอดเงิน)</h2>
-    <div id="adminGate"><p class="muted">ต้องใส่ PIN แอดมินก่อน (ใช้ PIN เจ้าของก็ได้)</p></div>
+    <div id="adminGate"><p class="muted">ต้องใส่ PIN แอดมินก่อน (ใช้ PIN เจ้าของก็ได้)</p><div class="row"><input id="adminPinNameInline" placeholder="ชื่อแอดมิน"><input id="adminPinInline" type="password" inputmode="numeric" placeholder="PIN แอดมิน"></div><button onclick="pinVerifyInline('admin')">เข้าโซนแอดมิน</button><p id="adminPinErr" class="bad"></p></div>
     <div id="adminBody" style="display:none">
       <p class="muted">Bae's: Wed–Sat, 11pm–3am Wed–Fri, 11pm–4am Sat &amp; public-holiday eve, Tanjong Pagar. Taxi max $20/head with receipt, otherwise company transport 0.5–1h after close.</p>
       <input type="date" id="schDate"><select id="schStaff"></select><select id="schShop"></select>
@@ -164,7 +164,7 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{border-bottom:1px
 
   <div id="tab-owner" class="card" style="display:none">
     <h2 data-t="ownerTitle">เจ้าของ — ยอดเงิน (เฉพาะเจ้าของ)</h2>
-    <div id="ownerGate"><p class="muted">ต้องใส่ PIN เจ้าของก่อน</p></div>
+    <div id="ownerGate"><p class="muted">ต้องใส่ PIN เจ้าของก่อน</p><div class="row"><input id="ownerPinInline" type="password" inputmode="numeric" placeholder="PIN เจ้าของ"></div><button onclick="pinVerifyInline('owner')">เข้าโซนเจ้าของ</button><p id="ownerPinErr" class="bad"></p></div>
     <div id="ownerBody" style="display:none">
       <input type="month" id="sumMonth"><button onclick="loadSummary()" data-t="showSummary">ดูสรุปยอด</button>
       <div id="summaryBox"></div>
@@ -504,9 +504,18 @@ async function pinVerify(){
   const role=document.getElementById('pinRole').value, pin=document.getElementById('pinCode').value;
   const name=document.getElementById('pinName').value.trim();
   try{const d=await api('/api/pin/verify',{method:'POST',body:JSON.stringify({role,pin,name:name||undefined})});
-    if(role==='owner'){ownerToken=d.token;adminToken=d.token;document.getElementById('app').style.display='block';document.getElementById('tab-owner').style.display='block';document.getElementById('ownerBody').style.display='block';document.getElementById('tab-admin').style.display='block';document.getElementById('adminBody').style.display='block';buildTabs();loadOwner();showTab('today');}
-    else{adminToken=d.token;document.getElementById('app').style.display='block';document.getElementById('tab-admin').style.display='block';document.getElementById('adminBody').style.display='block';buildTabs();showTab('today');}
+    if(role==='owner'){ownerToken=d.token;adminToken=d.token;document.getElementById('app').style.display='block';document.getElementById('tab-owner').style.display='block';document.getElementById('ownerBody').style.display='block';document.getElementById('ownerGate').style.display='none';document.getElementById('tab-admin').style.display='block';document.getElementById('adminBody').style.display='block';document.getElementById('adminGate').style.display='none';buildTabs();loadOwner();showTab('today');}
+    else{adminToken=d.token;document.getElementById('app').style.display='block';document.getElementById('tab-admin').style.display='block';document.getElementById('adminBody').style.display='block';document.getElementById('adminGate').style.display='none';buildTabs();showTab('today');}
     alert('PIN OK — '+role+(d.admin_name?' ('+d.admin_name+')':''));}catch(e){document.getElementById('pinErr').textContent=e.message;}
+}
+async function pinVerifyInline(role){
+  const pin=role==='owner'?document.getElementById('ownerPinInline').value:document.getElementById('adminPinInline').value;
+  const name=role==='admin'?document.getElementById('adminPinNameInline').value.trim():'';
+  const errEl=document.getElementById(role==='owner'?'ownerPinErr':'adminPinErr');
+  try{const d=await api('/api/pin/verify',{method:'POST',body:JSON.stringify({role,pin,name:name||undefined})});
+    if(role==='owner'){ownerToken=d.token;adminToken=d.token;document.getElementById('app').style.display='block';document.getElementById('tab-owner').style.display='block';document.getElementById('ownerBody').style.display='block';document.getElementById('ownerGate').style.display='none';document.getElementById('tab-admin').style.display='block';document.getElementById('adminBody').style.display='block';document.getElementById('adminGate').style.display='none';buildTabs();loadOwner();showTab('owner');}
+    else{adminToken=d.token;document.getElementById('app').style.display='block';document.getElementById('tab-admin').style.display='block';document.getElementById('adminBody').style.display='block';document.getElementById('adminGate').style.display='none';buildTabs();showTab('admin');}
+  }catch(e){errEl.textContent=e.message;}
 }
 async function loadOwner(){
   const d=await api('/api/owner/staff',{token:ownerToken});
