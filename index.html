@@ -136,7 +136,7 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{border-bottom:1px
       <button class="ghost" onclick="loadSchedule()" data-t="showSched">ดูตาราง</button>
       <div id="schedBox"></div>
       <h2 data-t="backfill">ลงกะย้อนหลัง</h2>
-      <input type="date" id="bfDate"><select id="bfStaff"></select><select id="bfShop"></select>
+      <input type="date" id="bfDate"><select id="bfStaff"></select><select id="bfShop"></select><label>แทนงานให้ใคร (ถ้ามี)</label><select id="bfCover"><option value="">—</option></select>
       <div class="row"><input id="bfIn" type="datetime-local"><input id="bfOut" type="datetime-local"></div>
       <button onclick="backfill()" data-t="addBackfill">ลงกะย้อนหลัง</button>
       <h2 data-t="alerts">กะที่ขาดคน</h2>
@@ -329,7 +329,8 @@ async function refreshMe(){
     const pill=s=>`<button type="button" onclick="togglePill(this,${s.id},'group')" style="margin:2px;padding:8px 12px;border-radius:20px;border:1px solid #ccc;background:#fff;color:#222"> ${s.name}</button>`;
     const rpill=s=>`<button type="button" data-id="${s.id}" onclick="togglePill(this,${s.id},'rider')" style="margin:2px;padding:8px 12px;border-radius:20px;border:1px solid #ccc;background:#fff;color:#222"> ${s.name}</button>`;
     document.getElementById('groupPills').innerHTML=others.map(pill).join('')||'ไม่มีเพื่อนให้เลือก';
-    document.getElementById('riderPills').innerHTML=others.map(rpill).join('')||'—';}
+    document.getElementById('riderPills').innerHTML=others.map(rpill).join('')||'—';
+    cov.innerHTML='<option value="">—</option>'+others.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');}
   // Taxi payer: show every name as a tappable button (like the rider pills) — me first, already selected.
   taxiPayerSel = (lc&&lc.taxi_payer)?lc.taxi_payer:me.name;
   const esc = s => s.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
@@ -549,6 +550,7 @@ async function loadOwner(){
   document.getElementById('editStaff').innerHTML=document.getElementById('billStaff').innerHTML;document.getElementById('editMonth').value=new Date().toISOString().slice(0,7);
   document.getElementById('shopDir').innerHTML=d.shops.map(s=>{const esc=v=>(v||'').replace(/"/g,'&quot;');return `<div style="border-bottom:1px solid #eee;padding:8px 0"><input data-shopname="${s.id}" value="${esc(s.name)}" style="width:150px"> เอเจนต์ $<input data-shopagent="${s.id}" type="number" value="${s.agent_rate}" style="width:70px"> เด็ก $<input data-shopworker="${s.id}" type="number" value="${s.worker_rate}" style="width:70px"> <button onclick="saveShop(${s.id})">บันทึก</button> <button class="ghost" onclick="toggleShop(${s.id},${s.active?0:1})">${s.active?'เปิดอยู่':'ปิดอยู่ — กดเปิด'}</button></div>`;}).join('');
   const fill=(id)=>{document.getElementById(id).innerHTML=d.staff.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')};['schStaff','bfStaff','schCover'].forEach(fill);
+  document.getElementById('bfCover').innerHTML='<option value="">—</option>'+d.staff.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
   loadCoverRequests();
   loadOwnerLeaves();
 }
@@ -572,7 +574,7 @@ async function addShop(){const n=document.getElementById('newShopName').value;co
 async function addStaff(){const n=document.getElementById('newStaffName').value,p=document.getElementById('newStaffPhone').value;try{await api('/api/staff',{method:'POST',token:ownerToken,body:JSON.stringify({name:n,phone:p})});document.getElementById('newStaffName').value='';document.getElementById('newStaffPhone').value='';alert('เพิ่ม '+n+' แล้ว');loadOwner();}catch(e){alert('เพิ่มไม่ได้: '+e.message);}}
 async function addShift(){try{await api('/api/shift',{method:'POST',token:adminToken||ownerToken,body:JSON.stringify({staff_id:Number(document.getElementById('schStaff').value),shop_id:Number(document.getElementById('schShop').value),date:document.getElementById('schDate').value,time_start:document.getElementById('schStart').value,time_end:document.getElementById('schEnd').value,covers_for_id:Number(document.getElementById('schCover').value)||null})});alert('Shift added');}catch(e){alert('ลงกะไม่ได้: '+e.message);}}
 async function loadSchedule(){const d=await api('/api/schedule?from='+document.getElementById('schDate').value+'&to='+document.getElementById('schDate').value,{token:adminToken||ownerToken});document.getElementById('schedBox').innerHTML=d.shifts.map(s=>`${s.date} ${s.shop} ${s.staff} ${s.time_start}-${s.time_end} ${s.covers_for?('covers '+s.covers_for):''}`).join('<br>')||'—';}
-async function backfill(){await api('/api/backfill',{method:'POST',token:adminToken||ownerToken,body:JSON.stringify({staff_id:Number(document.getElementById('bfStaff').value),shop_id:Number(document.getElementById('bfShop').value),date:document.getElementById('bfDate').value,clock_in:document.getElementById('bfIn').value,clock_out:document.getElementById('bfOut').value})});alert('Backfilled');}
+async function backfill(){await api('/api/backfill',{method:'POST',token:adminToken||ownerToken,body:JSON.stringify({staff_id:Number(document.getElementById('bfStaff').value),shop_id:Number(document.getElementById('bfShop').value),date:document.getElementById('bfDate').value,clock_in:document.getElementById('bfIn').value,clock_out:document.getElementById('bfOut').value,covers_for_id:Number(document.getElementById('bfCover').value)||null})});alert('Backfilled');}
 async function loadEditRecords(){
   const sid=document.getElementById('editStaff').value,m=document.getElementById('editMonth').value||new Date().toISOString().slice(0,7);
   try{const d=await api('/api/owner/records?staff_id='+sid+'&month='+m,{token:ownerToken});

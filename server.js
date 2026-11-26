@@ -870,9 +870,22 @@ async function handle(req, res) {
       const b = await bodyJson(req);
       const st = db.prepare('SELECT * FROM staff WHERE id=?').get(b.staff_id);
       if (!st || !st.active) return send(res, 403, { error: 'staff deactivated' });
-      const hrs = clampedHours(b.clock_in, b.clock_out, b.shop_id, b.date, b.staff_id);
+      // datetime-local sends naive "YYYY-MM-DDTHH:MM" (no zone). The server
+      // runs on UTC, so plain new Date() would read it as UTC while the
+      // shift window is built in SGT (+08:00) — the overlap would be empty
+      // and the record would store 0 hours. Treat naive values as SGT.
+      const toSGT = v => {
+        if (!v || typeof v !== 'string') return v;
+        try {
+          if (/Z$|[+-]\d{2}:?\d{2}$/.test(v)) return new Date(v).toISOString();
+          const s = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(v) ? v + ':00' : v;
+          return new Date(s + '+08:00').toISOString();
+        } catch (e) { return v; }
+      };
+      const inISO = toSGT(b.clock_in), outISO = toSGT(b.clock_out);
+      const hrs = clampedHours(inISO, outISO, b.shop_id, b.date, b.staff_id);
       const r = db.prepare('INSERT INTO clock_records(staff_id,shop_id,date,clock_in,clock_out,hours,is_15x,covers_for_id,taxi_amount,taxi_payer,taxi_receipt_no,taxi_remark,riders,source,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-        .run(b.staff_id, b.shop_id, b.date, b.clock_in, b.clock_out, hrs, is15x(b.date) ? 1 : 0, b.covers_for_id || null, Number(b.taxi_amount || 0), b.taxi_payer || '', b.taxi_receipt_no || '', b.taxi_remark || '', JSON.stringify(b.riders || []), 'backfill', new Date().toISOString());
+        .run(b.staff_id, b.shop_id, b.date, inISO, outISO, hrs, is15x(b.date) ? 1 : 0, b.covers_for_id || null, Number(b.taxi_amount || 0), b.taxi_payer || '', b.taxi_receipt_no || '', b.taxi_remark || '', JSON.stringify(b.riders || []), 'backfill', new Date().toISOString());
       log(role, 'backfill', st.name + ' ' + shopName(b.shop_id) + ' ' + b.date + ' ' + hrs + 'h');
       send(res, 200, { ok: true, id: Number(r.lastInsertRowid), hours: hrs }); return;
     }
