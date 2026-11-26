@@ -48,7 +48,7 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{border-bottom:1px
   <div id="tab-clock" class="card">
     <h2 data-t="clockTitle">ตอกบัตร</h2>
     <div id="meLine" class="muted"></div>
-    <label data-t="shop">ร้าน</label><select id="shopSel"></select>
+    <label data-t="shop">ร้าน</label><select id="shopSel" style="display:none"></select><div id="shopPills"></div>
     <label data-t="covers">แทนงานให้ใคร (ถ้ามี)</label><select id="coverSel"><option value="">—</option></select>
     <div class="row" style="gap:8px">
       <button id="modeSolo" onclick="setClockMode(false)" style="flex:1;padding:14px;font-size:16px">🙋 มาคนเดียว</button>
@@ -253,7 +253,25 @@ function getLoc(){
     }, {enableHighAccuracy:true, timeout:8000, maximumAge:60000});
   });
 }
-async function loadDir(){const d=await api('/api/directory');shops=d.shops;const fill=(id)=>{const el=document.getElementById(id);el.innerHTML=shops.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')};['shopSel','findShop','schShop','bfShop','billShop','leaveShop','bdShop'].forEach(fill);}
+async function loadDir(){const d=await api('/api/directory');shops=d.shops;const fill=(id)=>{const el=document.getElementById(id);el.innerHTML=shops.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')};['shopSel','findShop','schShop','bfShop','billShop','leaveShop','bdShop'].forEach(fill);renderShopPills();}
+function renderShopPills(){
+  const box=document.getElementById('shopPills');if(!box)return;
+  const myShop=window._myShopToday||null;
+  const sel=Number(document.getElementById('shopSel').value)||null;
+  box.innerHTML=shops.map(s=>`<span class="pill${sel===s.id?' sel':''}" onclick="pickShop(${s.id})">${s.name}${myShop&&myShop.shop_id===s.id?' · มีกะวันนี้':''}</span>`).join('');
+}
+function pickShop(id){document.getElementById('shopSel').value=id;renderShopPills();}
+async function preselectShopFromSchedule(){
+  if(!staffToken||!me)return;
+  try{
+    const d=await api('/api/today-status',{token:staffToken});
+    const mine=[];
+    for(const s of d.shops){for(const x of s.scheduled){if(x.staff===me.name)mine.push({shop_id:s.shop_id,shop_name:s.shop});}}
+    if(mine.length===1){window._myShopToday=mine[0];document.getElementById('shopSel').value=mine[0].shop_id;}
+    else{window._myShopToday=null;}
+    renderShopPills();
+  }catch(e){window._myShopToday=null;renderShopPills();}
+}
 async function staffLogin(){
   const name=document.getElementById('loginName').value.trim(), phone=document.getElementById('loginPhone').value.trim();
   try{const d=await api('/api/staff-login',{method:'POST',body:JSON.stringify({name,phone})});
@@ -285,7 +303,7 @@ async function deviceLogin(){
 async function enterApp(){
   document.getElementById('login').style.display='none';document.getElementById('app').style.display='block';
   document.getElementById('who').textContent='👤 '+me.name;
-  await loadDir();buildTabs();refreshMe();
+  await loadDir();buildTabs();refreshMe();preselectShopFromSchedule();
 }
 function buildTabs(){
   const tabs=[['clock','⏱ Clock'],['hours','📅 My hours'],['avail','✅ Availability'],['today','📊 Today'],['find','🔍 Find cover'],['admin','🗓 Admin'],['roster','🗓 ตารางเดือน'],['owner','💰 Owner']];
@@ -294,7 +312,7 @@ function buildTabs(){
   const opts=async()=>{try{const d=await api('/api/owner/staff',{token:ownerToken});return d.staff}catch(e){return[]}};
   window._staffOpts=opts;
 }
-function showTab(k){['clock','hours','avail','today','find','admin','roster','owner'].forEach(x=>document.getElementById('tab-'+x).style.display=x===k?'block':'none');if(k==='today')loadToday();if(k==='avail'){buildAvailCal();loadMyLeaves();}if(k==='roster')loadBoard();if(k==='hours')loadMyHours();}
+function showTab(k){['clock','hours','avail','today','find','admin','roster','owner'].forEach(x=>document.getElementById('tab-'+x).style.display=x===k?'block':'none');if(k==='clock')preselectShopFromSchedule();if(k==='today')loadToday();if(k==='avail'){buildAvailCal();loadMyLeaves();}if(k==='roster')loadBoard();if(k==='hours')loadMyHours();}
 async function refreshMe(){
   document.getElementById('meLine').textContent=me?('Logged in as '+me.name):'';
   const cov=document.getElementById('coverSel');cov.innerHTML='<option value="">—</option>';
@@ -344,6 +362,10 @@ function updateTaxiHint(){
 function hideTaxiStep(){window._taxiSkipped=window._taxiRecordId;document.getElementById('taxiStep').style.display='none';}
 function pickPayer(el){taxiPayerSel=el.dataset.v;document.querySelectorAll('#taxiPayerPills button').forEach(b=>{b.style.background='#fff';b.style.color='#222';});el.style.background='#0d7a5f';el.style.color='#fff';}
 async function clockIn(){
+  if(window._myShopToday&&window._myShopToday.shop_id!==Number(document.getElementById('shopSel').value)){
+    const selName=(shops.find(s=>s.id===Number(document.getElementById('shopSel').value))||{}).name||'';
+    if(!confirm('วันนี้เธอมีกะที่ '+window._myShopToday.shop_name+' แต่กำลังจะตอกบัตรที่ '+selName+' — ถูกต้องไหม?'))return;
+  }
   document.getElementById('clockMsg').textContent='กำลังจับโลเคชั่น…';
   const [photo, loc]=await Promise.all([fileData('photoIn'), getLoc()]);
   const ids=[me.staff_id];if(isGroupMode){groupSel.forEach(id=>ids.push(id));}
