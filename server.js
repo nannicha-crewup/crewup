@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS staff_shop_rates(staff_id INTEGER, shop_id INTEGER, w
 CREATE TABLE IF NOT EXISTS pins(role TEXT PRIMARY KEY, salt TEXT, hash TEXT);
 CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, role TEXT, created_at TEXT);
 CREATE TABLE IF NOT EXISTS clock_records(id INTEGER PRIMARY KEY AUTOINCREMENT, staff_id INTEGER, shop_id INTEGER, date TEXT, clock_in TEXT, clock_out TEXT, hours REAL, is_15x INTEGER DEFAULT 0, covers_for_id INTEGER, taxi_amount REAL DEFAULT 0, taxi_payer TEXT DEFAULT '', taxi_receipt_no TEXT DEFAULT '', taxi_remark TEXT DEFAULT '', riders TEXT DEFAULT '[]', photo_in TEXT DEFAULT '', photo_out TEXT DEFAULT '', receipt_photo TEXT DEFAULT '', source TEXT DEFAULT 'app', created_at TEXT);
+CREATE TABLE IF NOT EXISTS receipt_photos(id INTEGER PRIMARY KEY AUTOINCREMENT, record_id INTEGER, photo TEXT, created_at TEXT);
 CREATE TABLE IF NOT EXISTS shifts(id INTEGER PRIMARY KEY AUTOINCREMENT, staff_id INTEGER, shop_id INTEGER, date TEXT, time_start TEXT, time_end TEXT, covers_for_id INTEGER, created_by TEXT DEFAULT '', status TEXT DEFAULT 'scheduled');
 CREATE TABLE IF NOT EXISTS availability(staff_id INTEGER, date TEXT, available INTEGER, PRIMARY KEY(staff_id, date));
 CREATE TABLE IF NOT EXISTS leaves(id INTEGER PRIMARY KEY AUTOINCREMENT, staff_id INTEGER, date TEXT, type TEXT, reason TEXT DEFAULT '', created_at TEXT);
@@ -104,6 +105,25 @@ function baesRule() { const b = db.prepare("SELECT id FROM shops WHERE name=?").
 function baesOpen(date) { const wd = new Date(date + 'T12:00:00').getDay(); return [2, 3, 4, 5, 6].includes(wd); }
 function baesClose(date) { const wd = new Date(date + 'T12:00:00').getDay(); return (wd === 6 || isPHEve(date)) ? '04:00' : '03:00'; }
 function taxiPerHead(amount, riders) { const heads = 1 + (riders || []).length; return { heads, per_head: +(amount / heads).toFixed(2) }; }
+// Taxi receipt photos: up to 5 per shift. The legacy single receipt_photo
+// column on clock_records stays for old cached pages; new photos go in
+// receipt_photos rows. Re-submits APPEND — they never delete existing rows.
+const MAX_RECEIPT_PHOTOS = 5;
+function appendReceiptPhotos(recordId, photos) {
+  if (!Array.isArray(photos)) return 0;
+  const have = db.prepare('SELECT COUNT(*) c FROM receipt_photos WHERE record_id=?').get(recordId).c;
+  const room = MAX_RECEIPT_PHOTOS - have;
+  if (room <= 0) return 0;
+  const ins = db.prepare('INSERT INTO receipt_photos(record_id, photo, created_at) VALUES (?,?,?)');
+  let n = 0;
+  for (const p of photos.slice(0, MAX_RECEIPT_PHOTOS)) {
+    if (n >= room) break;
+    if (typeof p !== 'string' || !p) continue;
+    ins.run(recordId, p.slice(0, 500000), new Date().toISOString());
+    n++;
+  }
+  return n;
+}
 function cappedTaxi(rec) {
   // Bae's taxi reimbursement is capped at $20/head (with receipt); excess is not claimable.
   if (rec.transport_mode === 'company') return 0;
@@ -554,10 +574,12 @@ async function handle(req, res) {
         const cap = rule ? rule.taxi_cap_per_head : 20;
         const { heads, per_head } = taxiPerHead(taxiAmt, riders);
         if (per_head > cap) warnings.push(`แท็กซี่ $${per_head}/คน เกินเพดาน $${cap}/คน (${heads} คน) — เบิกได้สูงสุด $${cap * heads}`);
-        if (!b.taxi_receipt_no && !b.receipt_photo) warnings.push('ต้องมีใบเสร็จถึงจะเบิกค่าแท็กซี่ได้');
+        const hasReceipt = !!b.receipt_photo || (Array.isArray(b.receipt_photos) && b.receipt_photos.some(p => typeof p === 'string' && p));
+        if (!b.taxi_receipt_no && !hasReceipt) warnings.push('ต้องมีใบเสร็จถึงจะเบิกค่าแท็กซี่ได้');
       }
-      db.prepare('UPDATE clock_records SET clock_out=?, hours=?, taxi_amount=?, taxi_payer=?, taxi_receipt_no=?, taxi_remark=?, riders=?, photo_out=?, receipt_photo=?, transport_mode=?, company_transport_at=?, taxi_warning=?, loc_out_lat=?, loc_out_lng=?, loc_out_acc=?, loc_out_status=? WHERE id=?')
-        .run(now.toISOString(), hrs, taxiAmt, b.taxi_payer || '', b.taxi_receipt_no || '', b.taxi_remark || '', JSON.stringify(riders), (b.photo || '').slice(0, 500000), (b.receipt_photo || '').slice(0, 500000), transportMode, b.company_transport_at || '', warnings.join('; '), locOut.lat, locOut.lng, locOut.acc, locOut.status, b.record_id);
+      db.prepare('UPDATE clock_records SET clock_out=?, hours=?, taxi_amount=?, taxi_payer=?, taxi_receipt_no=?, taxi_remark=?, riders=?, photo_out=?, receipt_photo=COALESCE(?, receipt_photo), transport_mode=?, company_transport_at=?, taxi_warning=?, loc_out_lat=?, loc_out_lng=?, loc_out_acc=?, loc_out_status=? WHERE id=?')
+        .run(now.toISOString(), hrs, taxiAmt, b.taxi_payer || '', b.taxi_receipt_no || '', b.taxi_remark || '', JSON.stringify(riders), (b.photo || '').slice(0, 500000), (typeof b.receipt_photo === 'string' ? b.receipt_photo.slice(0, 500000) : null), transportMode, b.company_transport_at || '', warnings.join('; '), locOut.lat, locOut.lng, locOut.acc, locOut.status, b.record_id);
+      appendReceiptPhotos(b.record_id, b.receipt_photos);
       log(st.name, 'clock_out', shopName(rec.shop_id) + ' ' + rec.date + ' ' + hrs + 'h taxi $' + taxiAmt + (transportMode === 'company' ? ' (company transport)' : '') + (warnings.length ? ' WARNING: ' + warnings.join('; ') : ''));
       send(res, 200, { ok: true, hours: hrs, warnings }); return;
     }
@@ -586,10 +608,12 @@ async function handle(req, res) {
         const cap = rule ? rule.taxi_cap_per_head : 20;
         const { heads, per_head } = taxiPerHead(taxiAmt, riders);
         if (per_head > cap) warnings.push(`แท็กซี่ $${per_head}/คน เกินเพดาน $${cap}/คน (${heads} คน) — เบิกได้สูงสุด $${cap * heads}`);
-        if (!b.taxi_receipt_no && !b.receipt_photo) warnings.push('ต้องมีใบเสร็จถึงจะเบิกค่าแท็กซี่ได้');
+        const hasReceipt = !!b.receipt_photo || (Array.isArray(b.receipt_photos) && b.receipt_photos.some(p => typeof p === 'string' && p));
+        if (!b.taxi_receipt_no && !hasReceipt) warnings.push('ต้องมีใบเสร็จถึงจะเบิกค่าแท็กซี่ได้');
       }
-      db.prepare('UPDATE clock_records SET taxi_amount=?, taxi_payer=?, taxi_receipt_no=?, riders=?, receipt_photo=?, transport_mode=?, company_transport_at=?, taxi_warning=? WHERE id=?')
-        .run(taxiAmt, b.taxi_payer || '', b.taxi_receipt_no || '', JSON.stringify(riders), (b.receipt_photo || '').slice(0, 500000), transportMode, b.company_transport_at || '', warnings.join('; '), b.record_id);
+      db.prepare('UPDATE clock_records SET taxi_amount=?, taxi_payer=?, taxi_receipt_no=?, riders=?, receipt_photo=COALESCE(?, receipt_photo), transport_mode=?, company_transport_at=?, taxi_warning=? WHERE id=?')
+        .run(taxiAmt, b.taxi_payer || '', b.taxi_receipt_no || '', JSON.stringify(riders), (typeof b.receipt_photo === 'string' ? b.receipt_photo.slice(0, 500000) : null), transportMode, b.company_transport_at || '', warnings.join('; '), b.record_id);
+      appendReceiptPhotos(b.record_id, b.receipt_photos);
       const capped = cappedTaxi({ shop_id: rec.shop_id, taxi_amount: taxiAmt, riders: JSON.stringify(riders), transport_mode: transportMode });
       log(me.name, 'taxi_save', shopName(rec.shop_id) + ' ' + rec.date + ' taxi $' + taxiAmt + ' payer ' + (b.taxi_payer || '') + (warnings.length ? ' WARNING: ' + warnings.join('; ') : ''));
       send(res, 200, { ok: true, taxi_amount: taxiAmt, capped, warnings }); return;
@@ -1134,18 +1158,28 @@ async function handle(req, res) {
       if (!staffId) return send(res, 400, { error: 'staff_id required' });
       const { from, to } = monthRange(month);
       const recs = db.prepare('SELECT * FROM clock_records WHERE staff_id=? AND date BETWEEN ? AND ? ORDER BY date').all(staffId, from, to);
-      send(res, 200, { month, staff: staffName(staffId), records: recs.map(r => ({ id: r.id, date: r.date, shop: shopName(r.shop_id), clock_in: r.clock_in, clock_out: r.clock_out, hours: r.hours, source: r.source, edit_note: r.edit_note || '', has_photo_in: !!r.photo_in, has_photo_out: !!r.photo_out, has_receipt_photo: !!r.receipt_photo, loc_in: locInfo(r, 'in'), loc_out: locInfo(r, 'out') })) }); return;
+      const recCounts = {};
+      if (recs.length) for (const row of db.prepare(`SELECT record_id, COUNT(*) c FROM receipt_photos WHERE record_id IN (${recs.map(() => '?').join(',')}) GROUP BY record_id`).all(...recs.map(r => r.id))) recCounts[row.record_id] = row.c;
+      send(res, 200, { month, staff: staffName(staffId), records: recs.map(r => ({ id: r.id, date: r.date, shop: shopName(r.shop_id), clock_in: r.clock_in, clock_out: r.clock_out, hours: r.hours, source: r.source, edit_note: r.edit_note || '', has_photo_in: !!r.photo_in, has_photo_out: !!r.photo_out, has_receipt_photo: !!r.receipt_photo || (recCounts[r.id] || 0) > 0, receipt_photo_count: (r.receipt_photo ? 1 : 0) + (recCounts[r.id] || 0), loc_in: locInfo(r, 'in'), loc_out: locInfo(r, 'out') })) }); return;
     }
     if (p === '/api/owner/record-photo') {
-      // Owner only: fetch one stored photo for a record — clock-in, clock-out
-      // or taxi receipt. Photos are returned one at a time so the records
-      // list stays light (each photo is a compressed data URL).
+      // Owner only: fetch stored photos for a record — clock-in, clock-out
+      // or taxi receipt. Clock-in/out return one photo each; receipt
+      // returns ALL receipt photos (legacy single photo first, then the
+      // multi-photo rows in id order), with `photo` kept as the first one
+      // for backward compatibility.
       const role = requireRole(req, res, ['owner']); if (!role) return;
       const id = Number(u.searchParams.get('id'));
       const which = u.searchParams.get('which') || 'in';
       const r = db.prepare('SELECT photo_in, photo_out, receipt_photo FROM clock_records WHERE id=?').get(id);
       if (!r) return send(res, 404, { error: 'record not found' });
-      const photo = which === 'out' ? r.photo_out : which === 'receipt' ? r.receipt_photo : r.photo_in;
+      if (which === 'receipt') {
+        const photos = [];
+        if (r.receipt_photo) photos.push(r.receipt_photo);
+        for (const row of db.prepare('SELECT photo FROM receipt_photos WHERE record_id=? ORDER BY id').all(id)) if (row.photo) photos.push(row.photo);
+        send(res, 200, { photo: photos[0] || '', photos }); return;
+      }
+      const photo = which === 'out' ? r.photo_out : r.photo_in;
       send(res, 200, { photo: photo || '' }); return;
     }
     if (p === '/api/owner/summary') {
