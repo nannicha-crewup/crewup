@@ -65,7 +65,8 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{border-bottom:1px
         <p class="muted">ตอกออกก่อนได้เลย ไม่ต้องรอใส่ค่าแท็กซี่</p>
       </div>
       <div id="taxiStep" style="display:none">
-        <h3>ค่าแท็กซี่กลับบ้าน (ไม่บังคับ — ใส่ทีหลังก็ได้)</h3>
+        <h3 id="taxiStepTitle">ค่าแท็กซี่กลับบ้าน (ไม่บังคับ — ใส่ทีหลังก็ได้)</h3>
+        <p class="muted" id="taxiPastInfo" style="display:none"></p>
         <label data-t="taxiAmt">ค่าแท็กซี่กลับบ้านทั้งคัน ($) — ใส่ยอดเต็ม เฉพาะคนจ่าย</label><input id="taxiAmt" type="number" step="0.01" value="0" oninput="updateTaxiHint()">
         <p class="muted" id="taxiWarn"></p>
         <label data-t="taxiPayer">ใครจ่ายค่าแท็กซี่กลับบ้าน</label><div id="taxiPayerPills"></div>
@@ -74,7 +75,7 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{border-bottom:1px
         <label data-t="receiptPhoto">รูปบิลแท็กซี่</label><input type="file" id="receiptPhoto" accept="image/*" multiple onchange="updateReceiptCount()">
         <p class="muted"><span id="receiptCount"></span>เลือกรูปจากคลังภาพได้ หรือถ่ายใหม่ก็ได้ (ได้สูงสุด 5 รูป)</p>
         <button onclick="saveTaxi()">บันทึกค่าแท็กซี่</button>
-        <button class="ghost" onclick="hideTaxiStep()">ข้าม (ไม่มีแท็กซี่)</button>
+        <button class="ghost" id="taxiSkipBtn" onclick="hideTaxiStep()">ข้าม (ไม่มีแท็กซี่)</button>
       </div>
     </div>
     <p id="clockMsg"></p>
@@ -324,7 +325,7 @@ async function refreshMe(){
   const todayUTC=new Date().toISOString().slice(0,10);
   const lc=(st&&st.last_closed&&st.last_closed.date===todayUTC)?st.last_closed:null;
   if(st&&st.open){document.getElementById('openShift').textContent='⏱ Clocked in at '+st.open.shop+' since '+sgtHM(st.open.clock_in);document.getElementById('clockOutBox').style.display='block';document.getElementById('outStep').style.display='block';document.getElementById('taxiStep').style.display='none';window._openId=st.open.id;}
-  else if(lc){document.getElementById('openShift').textContent='✅ ตอกบัตรออกแล้ว '+sgtHM(lc.clock_out)+' ('+lc.hours+' ชม.) — ใส่ค่าแท็กซี่คืนนี้ได้ข้างล่าง';if(window._taxiSkipped!==lc.id){document.getElementById('clockOutBox').style.display='block';document.getElementById('outStep').style.display='none';document.getElementById('taxiStep').style.display='block';window._taxiRecordId=lc.id;}else{document.getElementById('clockOutBox').style.display='none';}}
+  else if(lc){document.getElementById('openShift').textContent='✅ ตอกบัตรออกแล้ว '+sgtHM(lc.clock_out)+' ('+lc.hours+' ชม.) — ใส่ค่าแท็กซี่คืนนี้ได้ข้างล่าง';if(window._taxiSkipped!==lc.id){document.getElementById('clockOutBox').style.display='block';document.getElementById('outStep').style.display='none';document.getElementById('taxiStep').style.display='block';window._taxiRecordId=lc.id;window._taxiFromHours=false;window._taxiTransportMode=lc.transport_mode||'taxi';document.getElementById('taxiStepTitle').textContent='ค่าแท็กซี่กลับบ้าน (ไม่บังคับ — ใส่ทีหลังก็ได้)';document.getElementById('taxiPastInfo').style.display='none';document.getElementById('taxiSkipBtn').textContent='ข้าม (ไม่มีแท็กซี่)';}else{document.getElementById('clockOutBox').style.display='none';}}
   else{document.getElementById('openShift').textContent='Not clocked in.';document.getElementById('clockOutBox').style.display='none';}
   const sl=await api('/api/staff-list',{token:staffToken}).catch(()=>null);
   window._staffList=sl?sl.staff:[];
@@ -363,7 +364,9 @@ function updateTaxiHint(){
   if(amt>0&&per>20) t+=' — ⚠️ เกินเพดาน $20/คน เบิกได้แค่ $'+(20*heads)+' ถ้ามีคนนั่งมาด้วยให้แตะชื่อเพิ่ม';
   document.getElementById('taxiWarn').textContent=t;
 }
-function hideTaxiStep(){window._taxiSkipped=window._taxiRecordId;document.getElementById('taxiStep').style.display='none';}
+function hideTaxiStep(){
+  if(window._taxiFromHours){window._taxiFromHours=false;document.getElementById('taxiStep').style.display='none';refreshMe();showTab('hours');return;}
+  window._taxiSkipped=window._taxiRecordId;document.getElementById('taxiStep').style.display='none';}
 function pickPayer(el){taxiPayerSel=el.dataset.v;document.querySelectorAll('#taxiPayerPills button').forEach(b=>{b.style.background='#fff';b.style.color='#222';});el.style.background='#0d7a5f';el.style.color='#fff';}
 async function clockIn(){
   if(window._myShopToday&&window._myShopToday.shop_id!==Number(document.getElementById('shopSel').value)){
@@ -385,19 +388,69 @@ async function doClockOutSimple(){
     document.getElementById('clockMsg').textContent='✅ ตอกบัตรออกแล้ว '+d.hours+' ชม.'+(d.warnings&&d.warnings.length?' ⚠️ '+d.warnings.join('; '):'');
     window._openId=null;refreshMe();}catch(e){document.getElementById('clockMsg').textContent='❌ '+e.message;}
 }
+async function openTaxiForRecord(id){
+  const rec=(window._myHoursRecords||[]).find(r=>r.id===id);
+  if(!rec){alert('ไม่พบกะนี้');return;}
+  window._taxiRecordId=rec.id;window._taxiFromHours=true;window._taxiTransportMode=rec.transport_mode||'taxi';
+  showTab('clock');
+  document.getElementById('clockOutBox').style.display='block';
+  document.getElementById('outStep').style.display='none';
+  document.getElementById('taxiStep').style.display='block';
+  document.getElementById('taxiStepTitle').textContent='ค่าแท็กซี่ — '+fmtTh(rec.date)+' · '+rec.shop;
+  document.getElementById('taxiSkipBtn').textContent='ยกเลิก';
+  document.getElementById('taxiAmt').value=rec.taxi_amount||0;
+  document.getElementById('taxiReceipt').value=rec.taxi_receipt_no||'';
+  document.getElementById('receiptPhoto').value='';updateReceiptCount();
+  const info=document.getElementById('taxiPastInfo');
+  const n=rec.receipt_photo_count||0;
+  info.textContent=(rec.transport_mode==='company'?'กะนี้เป็นรถบริษัท — ยอดแท็กซี่เป็น $0 · ':'')+(n>0?('กะนี้มีรูปบิลแล้ว '+n+' รูป — รูปใหม่จะเพิ่มต่อท้าย (สูงสุด 5 รูปต่อกะ)'):'กะนี้ยังไม่มีรูปบิลแท็กซี่');
+  info.style.display='block';
+  // Payer pills: full staff list, same as the tonight flow (me first).
+  taxiPayerSel=rec.taxi_payer||me.name;
+  const esc=s=>s.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+  const ppill=(label,val,on)=>`<button type="button" data-v="${esc(val)}" onclick="pickPayer(this)" style="margin:2px;padding:8px 12px;border-radius:20px;border:1px solid #ccc;background:${on?'#0d7a5f':'#fff'};color:${on?'#fff':'#222'}"> ${label}</button>`;
+  const others=(window._staffList||[]).filter(s=>s.id!==me.staff_id);
+  document.getElementById('taxiPayerPills').innerHTML=ppill(me.name+' (ฉันจ่ายเอง)',me.name,taxiPayerSel===me.name)+others.map(s=>ppill(s.name,s.name,taxiPayerSel===s.name)).join('')+ppill('เจ้าของจ่าย','owner',taxiPayerSel==='owner')+ppill('ร้านจ่าย','shop',taxiPayerSel==='shop');
+  // Rider pills: crew who clocked in at this shop that night. Saved riders
+  // not in the crew are kept too, so the prefill is never lost.
+  let crew=[];
+  try{const d=await api('/api/night-crew?date='+rec.date+'&shop_id='+rec.shop_id,{token:staffToken});crew=d.crew||[];}catch(e){crew=[];}
+  const byId={};(window._staffList||[]).forEach(s=>{byId[s.id]=s.name;});
+  const pillIds=new Set(crew.filter(s=>s.id!==me.staff_id).map(s=>s.id));
+  (rec.riders||[]).forEach(rid=>{if(Number(rid)!==me.staff_id)pillIds.add(Number(rid));});
+  const rpill=s=>`<button type="button" data-id="${s.id}" onclick="togglePill(this,${s.id},'rider')" style="margin:2px;padding:8px 12px;border-radius:20px;border:1px solid #ccc;background:#fff;color:#222"> ${s.name}</button>`;
+  document.getElementById('riderPills').innerHTML=[...pillIds].map(rid=>{const nm=(crew.find(s=>s.id===rid)||{}).name||byId[rid]||('id '+rid);return rpill({id:rid,name:nm});}).join('')||'—';
+  riderSel.clear();
+  (rec.riders||[]).forEach(rid=>{riderSel.add(Number(rid));const b=document.querySelector(`#riderPills button[data-id="${rid}"]`);if(b){b.style.background='#0d7a5f';b.style.color='#fff';}});
+  updateTaxiHint();
+  document.getElementById('clockMsg').textContent='';
+  document.getElementById('taxiStep').scrollIntoView();
+}
 async function saveTaxi(){
   const receipts=await fileDataAll('receiptPhoto');
-  try{const d=await api('/api/clock-record/taxi',{method:'POST',token:staffToken,body:JSON.stringify({record_id:window._taxiRecordId,taxi_amount:Number(document.getElementById('taxiAmt').value||0),taxi_payer:taxiPayerSel||me.name,taxi_receipt_no:document.getElementById('taxiReceipt').value,riders:[...riderSel],receipt_photos:receipts})});
-    document.getElementById('clockMsg').textContent='✅ บันทึกค่าแท็กซี่แล้ว $'+d.taxi_amount+' (เบิกได้ $'+d.capped+')'+(d.warnings&&d.warnings.length?' ⚠️ '+d.warnings.join('; '):'');
+  try{const d=await api('/api/clock-record/taxi',{method:'POST',token:staffToken,body:JSON.stringify({record_id:window._taxiRecordId,taxi_amount:Number(document.getElementById('taxiAmt').value||0),taxi_payer:taxiPayerSel||me.name,taxi_receipt_no:document.getElementById('taxiReceipt').value,riders:[...riderSel],receipt_photos:receipts,transport_mode:window._taxiTransportMode||'taxi'})});
     document.getElementById('receiptPhoto').value='';updateReceiptCount();
-    riderSel.clear();refreshMe();}catch(e){document.getElementById('clockMsg').textContent='❌ '+e.message;}
+    riderSel.clear();
+    if(window._taxiFromHours){window._taxiFromHours=false;refreshMe();alert('✅ บันทึกค่าแท็กซี่แล้ว $'+d.taxi_amount+' (เบิกได้ $'+d.capped+')'+(d.warnings&&d.warnings.length?' ⚠️ '+d.warnings.join('; '):''));showTab('hours');return;}
+    document.getElementById('clockMsg').textContent='✅ บันทึกค่าแท็กซี่แล้ว $'+d.taxi_amount+' (เบิกได้ $'+d.capped+')'+(d.warnings&&d.warnings.length?' ⚠️ '+d.warnings.join('; '):'');
+    refreshMe();}catch(e){document.getElementById('clockMsg').textContent='❌ '+e.message;}
 }
 async function loadMyHours(){
   const m=document.getElementById('hoursMonth').value||new Date().toISOString().slice(0,7);
   try{
     const d=staffToken?await api('/api/my-hours?staff_id='+me.staff_id+'&month='+m,{token:staffToken})
       :await api('/api/owner/agent-hours?month='+m,{token:ownerToken});
-    document.getElementById('myHours').innerHTML='<p>'+(d.staff?d.staff+' — ':'')+'Total hours: <b>'+d.total_hours+'</b> · Taxi: $'+d.taxi_total+'</p>'+(d.records.length?d.records.map(r=>`<div>${r.date} · ${r.shop} · ${r.hours||''}h ${r.is_15x?'(1.5x)':''} ${r.covers_for?('covers '+r.covers_for):''} ${r.transport_mode==='company'?'(company transport)':''} ${r.taxi_warning?('⚠️ '+r.taxi_warning):''}</div>`).join(''):'<p class="muted">เดือนนี้ยังไม่มีชั่วโมงในแอป</p>');
+    window._myHoursRecords=d.records||[];
+    document.getElementById('myHours').innerHTML='<p>'+(d.staff?d.staff+' — ':'')+'Total hours: <b>'+d.total_hours+'</b> · Taxi: $'+d.taxi_total+'</p>'+(d.records.length?d.records.map(r=>{
+      // Staff only: taxi status + add/correct button for closed shifts.
+      let taxi='';
+      if(staffToken&&r.clock_out){
+        const entered=(r.taxi_amount||0)>0||!!r.taxi_receipt_no||(r.receipt_photo_count||0)>0||r.transport_mode==='company';
+        const status=r.transport_mode==='company'?'รถบริษัท':(entered?('แท็กซี่ $'+(r.taxi_amount||0)):'ยังไม่ได้ใส่ค่าแท็กซี่');
+        const photos=(r.receipt_photo_count||0)>0?(' · มีรูปบิล '+r.receipt_photo_count+' รูป'):'';
+        taxi=' — '+status+photos+' <button class="ghost" onclick="openTaxiForRecord('+r.id+')">'+(entered?'แก้ค่าแท็กซี่':'ใส่ค่าแท็กซี่')+'</button>';
+      }
+      return `<div>${r.date} · ${r.shop} · ${r.hours||''}h ${r.is_15x?'(1.5x)':''} ${r.covers_for?('covers '+r.covers_for):''} ${r.transport_mode==='company'?'(company transport)':''} ${r.taxi_warning?('⚠️ '+r.taxi_warning):''}${taxi}</div>`;}).join(''):'<p class="muted">เดือนนี้ยังไม่มีชั่วโมงในแอป</p>');
   }catch(e){document.getElementById('myHours').innerHTML='<p>ดูไม่ได้: '+e.message+'</p>';}
 }
 const TH_MONTHS=['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];

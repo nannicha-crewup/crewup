@@ -146,6 +146,8 @@ try {
 } catch (e) {}
 // Clock times are stored as UTC ISO strings; display them in Singapore time (UTC+8).
 function sgtHHMM(iso) { if (!iso) return ''; const d = new Date(new Date(iso).getTime() + 8 * 3600e3); return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0'); }
+const TH_M_S = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+function thDateShort(iso) { if (!iso) return ''; const p = String(iso).split('-'); if (p.length < 3) return String(iso); return Number(p[2]) + ' ' + TH_M_S[Number(p[1]) - 1] + ' ' + (Number(p[0]) + 543); }
 function normPhone(p) { const d = String(p || '').replace(/\D/g, ''); return d.length > 8 ? d.slice(-8) : d; }
 function staffAuth(req) {
   const h = req.headers.authorization || '';
@@ -349,6 +351,20 @@ async function handle(req, res) {
     if (p === '/api/staff-list') {
       const st = requireStaff(req, res); if (!st) return;
       send(res, 200, { staff: db.prepare('SELECT id,name FROM staff WHERE active=1 ORDER BY name').all() }); return;
+    }
+    if (p === '/api/night-crew') {
+      // Staff-visible: who clocked in at a given shop on a given date.
+      // Names + ids only — no phones, money or photos. Used to build the
+      // rider pills when adding taxi for a past shift. Same visibility as
+      // the Today board, which already shows staff who worked today.
+      const me = requireStaff(req, res); if (!me) return;
+      const date = String(u.searchParams.get('date') || '');
+      const shopId = Number(u.searchParams.get('shop_id'));
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !shopId) return send(res, 400, { error: 'date (YYYY-MM-DD) and shop_id required' });
+      const crew = db.prepare('SELECT DISTINCT staff_id FROM clock_records WHERE shop_id=? AND date=? AND clock_in IS NOT NULL').all(shopId, date)
+        .map(r => { const s = db.prepare('SELECT id,name FROM staff WHERE id=? AND active=1').get(r.staff_id); return s ? { id: s.id, name: s.name } : null; })
+        .filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
+      send(res, 200, { date, shop_id: shopId, shop: shopName(shopId), crew }); return;
     }
     if (p === '/api/staff-login' && req.method === 'POST') {
       // Step 1 of OTP login: name + registered phone. No real SMS is sent in
@@ -601,9 +617,9 @@ async function handle(req, res) {
         const tonight = db.prepare("SELECT * FROM clock_records WHERE shop_id=? AND date=? AND clock_out IS NOT NULL AND taxi_amount>0").all(rec.shop_id, rec.date);
         const riderIds = riders.map(Number);
         const paidByOther = tonight.find(r => r.staff_id !== rec.staff_id && JSON.parse(r.riders || '[]').map(Number).includes(rec.staff_id));
-        if (paidByOther) return send(res, 400, { error: staffName(paidByOther.staff_id) + ' ลงค่าแท็กซี่คืนนี้ไว้แล้ว ($' + paidByOther.taxi_amount + ' ทั้งคัน) — เธอนั่งมาด้วยกันแล้ว' });
+        if (paidByOther) return send(res, 400, { error: staffName(paidByOther.staff_id) + ' ลงค่าแท็กซี่วันที่ ' + thDateShort(rec.date) + ' ไว้แล้ว ($' + paidByOther.taxi_amount + ' ทั้งคัน) — เธอนั่งมาด้วยกันแล้ว' });
         const riderPaid = tonight.find(r => r.staff_id !== rec.staff_id && riderIds.includes(r.staff_id));
-        if (riderPaid) return send(res, 400, { error: staffName(riderPaid.staff_id) + ' ลงค่าแท็กซี่คืนนี้ไว้แล้ว ($' + riderPaid.taxi_amount + ') — ค่ารถคันเดียวกันลงได้แค่คนจ่ายคนเดียว' });
+        if (riderPaid) return send(res, 400, { error: staffName(riderPaid.staff_id) + ' ลงค่าแท็กซี่วันที่ ' + thDateShort(rec.date) + ' ไว้แล้ว ($' + riderPaid.taxi_amount + ') — ค่ารถคันเดียวกันลงได้แค่คนจ่ายคนเดียว' });
         const rule = baesRule();
         const cap = rule ? rule.taxi_cap_per_head : 20;
         const { heads, per_head } = taxiPerHead(taxiAmt, riders);
@@ -646,8 +662,11 @@ async function handle(req, res) {
       if (sid !== me.id) return send(res, 403, { error: 'you can only view your own hours' });
       const { from, to } = monthRange(month);
       const recs = db.prepare('SELECT * FROM clock_records WHERE staff_id=? AND date BETWEEN ? AND ? ORDER BY date').all(sid, from, to);
+      // Receipt-photo counts (legacy single photo + multi-photo rows), one query.
+      const recCounts = {};
+      if (recs.length) for (const row of db.prepare(`SELECT record_id, COUNT(*) c FROM receipt_photos WHERE record_id IN (${recs.map(() => '?').join(',')}) GROUP BY record_id`).all(...recs.map(r => r.id))) recCounts[row.record_id] = row.c;
       // Staff see hours + own taxi only — never pay or rates.
-      send(res, 200, { month, total_hours: +recs.reduce((a, r) => a + (r.hours || 0), 0).toFixed(2), taxi_total: +recs.reduce((a, r) => a + (r.taxi_amount || 0), 0).toFixed(2), records: recs.map(r => ({ id: r.id, date: r.date, shop: shopName(r.shop_id), clock_in: r.clock_in, clock_out: r.clock_out, hours: r.hours, is_15x: !!r.is_15x, covers_for: r.covers_for_id ? staffName(r.covers_for_id) : null, taxi_amount: r.taxi_amount, taxi_payer: r.taxi_payer, transport_mode: r.transport_mode || 'taxi', taxi_warning: r.taxi_warning || '' })) }); return;
+      send(res, 200, { month, total_hours: +recs.reduce((a, r) => a + (r.hours || 0), 0).toFixed(2), taxi_total: +recs.reduce((a, r) => a + (r.taxi_amount || 0), 0).toFixed(2), records: recs.map(r => ({ id: r.id, date: r.date, shop: shopName(r.shop_id), shop_id: r.shop_id, clock_in: r.clock_in, clock_out: r.clock_out, hours: r.hours, is_15x: !!r.is_15x, covers_for: r.covers_for_id ? staffName(r.covers_for_id) : null, taxi_amount: r.taxi_amount, taxi_payer: r.taxi_payer, taxi_receipt_no: r.taxi_receipt_no || '', riders: JSON.parse(r.riders || '[]'), receipt_photo_count: (r.receipt_photo ? 1 : 0) + (recCounts[r.id] || 0), transport_mode: r.transport_mode || 'taxi', taxi_warning: r.taxi_warning || '' })) }); return;
     }
     if (p === '/api/availability' && req.method === 'POST') {
       if (!publicAccessOn()) return send(res, 403, { error: 'access_disabled' });
